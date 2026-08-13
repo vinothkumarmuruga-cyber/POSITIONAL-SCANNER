@@ -12,8 +12,9 @@ import zipfile
 import json
 import re
 
+
 # ============================================================
-# IST
+# IST TIME
 # ============================================================
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
@@ -39,88 +40,101 @@ st.set_page_config(
 # ============================================================
 
 st.markdown("""
-    <style>
+<style>
 
-        .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 1rem !important;
-        }
+.block-container {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+}
 
-        h1 {
-            font-size: 1.8rem !important;
-            margin-bottom: 0rem !important;
-            white-space: nowrap !important;
-        }
+/* TITLE */
+h1 {
+    font-size: 1.8rem !important;
+    margin-bottom: 0rem !important;
+    white-space: nowrap !important;
+}
 
-        h2 {
-            font-size: 1.1rem !important;
-            padding-top: 0.2rem !important;
-            margin-bottom: 0.1rem !important;
-        }
+h2 {
+    font-size: 1.1rem !important;
+    padding-top: 0.2rem !important;
+    margin-bottom: 0.1rem !important;
+}
 
-        h3 {
-            font-size: 1.0rem !important;
-            padding-top: 0.1rem !important;
-            margin-bottom: 0.1rem !important;
-        }
+h3 {
+    font-size: 1.0rem !important;
+    padding-top: 0.1rem !important;
+    margin-bottom: 0.1rem !important;
+}
 
-        /* Tabs */
 
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 10px;
-        }
+/* ============================================================
+   TABS
+   ============================================================ */
 
-        .stTabs [data-baseweb="tab"] {
-            height: 45px;
-            white-space: pre-wrap;
-            background-color: #f0f2f6;
-            border-radius: 5px;
-            padding: 10px 20px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            border: 1px solid #d6d6d6;
-        }
+.stTabs [data-baseweb="tab-list"] {
+    gap: 10px;
+}
 
-        .stTabs [aria-selected="true"] {
-            background-color: #007bff;
-            color: white !important;
-            border-color: #007bff;
-        }
+.stTabs [data-baseweb="tab"] {
+    height: 45px;
+    white-space: pre-wrap;
+    background-color: #f0f2f6;
+    border-radius: 5px;
+    padding: 10px 20px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border: 1px solid #d6d6d6;
+}
 
-        /* Prevent graying during refresh */
+.stTabs [aria-selected="true"] {
+    background-color: #007bff;
+    color: white !important;
+    border-color: #007bff;
+}
 
-        .stApp {
-            transition: none !important;
-        }
 
-        [data-testid="stAppViewContainer"],
-        [data-testid="stHeader"] {
-            opacity: 1 !important;
-            transition: none !important;
-        }
+/* ============================================================
+   REFRESH - PREVENT GREY EFFECT
+   ============================================================ */
 
-        /* Hide uploader instructions */
+.stApp {
+    transition: none !important;
+}
 
-        [data-testid="stFileUploaderDropzone"] div div span {
-            display: none !important;
-        }
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"] {
+    opacity: 1 !important;
+    transition: none !important;
+}
 
-        [data-testid="stFileUploaderDropzone"] div div small {
-            display: none !important;
-        }
 
-        /* Dataframe */
+/* ============================================================
+   FILE UPLOADER
+   ============================================================ */
 
-        div[data-testid="stDataFrame"] {
-            font-weight: 600 !important;
-        }
+[data-testid="stFileUploaderDropzone"] div div span {
+    display: none !important;
+}
 
-    </style>
+[data-testid="stFileUploaderDropzone"] div div small {
+    display: none !important;
+}
+
+
+/* ============================================================
+   DATAFRAME
+   ============================================================ */
+
+div[data-testid="stDataFrame"] {
+    font-weight: 600 !important;
+}
+
+</style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# PERSISTENT STORAGE
+# DATA DIRECTORIES
 # ============================================================
 
 DATA_DIR = "data"
@@ -129,25 +143,10 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 
-BLACKLIST_FILE = os.path.join(
-    DATA_DIR,
-    "blacklist.json"
-)
-
-TOKEN_FILE = os.path.join(
-    DATA_DIR,
-    "token.json"
-)
-
-META_FILE = os.path.join(
-    DATA_DIR,
-    "meta.json"
-)
-
-LTP_CACHE_FILE = os.path.join(
-    DATA_DIR,
-    "ltp_cache.json"
-)
+BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist.json")
+TOKEN_FILE = os.path.join(DATA_DIR, "token.json")
+META_FILE = os.path.join(DATA_DIR, "meta.json")
+LTP_CACHE_FILE = os.path.join(DATA_DIR, "ltp_cache.json")
 
 
 FILES = {
@@ -155,18 +154,6 @@ FILES = {
     "Weekly": os.path.join(DATA_DIR, "weekly.csv"),
     "Intraday": os.path.join(DATA_DIR, "intraday.csv")
 }
-
-
-# ============================================================
-# PRIORITY SETTINGS
-# ============================================================
-
-# Your requested range
-PRIORITY_MIN = 90.0
-PRIORITY_MAX = 110.0
-
-# Maximum priority stocks shown first
-PRIORITY_LIMIT = 10
 
 
 # ============================================================
@@ -249,17 +236,13 @@ def extract_date_from_filename(filename):
 
         d = match.group(1)
 
-        return (
-            f"{d[:4]}-"
-            f"{d[4:6]}-"
-            f"{d[6:]}"
-        )
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}"
 
     return None
 
 
 # ============================================================
-# ZIP -> CSV
+# ZIP EXTRACTION
 # ============================================================
 
 def extract_csv_from_zip(zip_file):
@@ -275,9 +258,7 @@ def extract_csv_from_zip(zip_file):
 
             if not csv_files:
 
-                st.error(
-                    "No CSV file found in the ZIP archive."
-                )
+                st.error("No CSV file found in ZIP archive.")
 
                 return None, None
 
@@ -289,9 +270,7 @@ def extract_csv_from_zip(zip_file):
 
     except Exception as e:
 
-        st.error(
-            f"Error extracting ZIP file: {e}"
-        )
+        st.error(f"Error extracting ZIP file: {e}")
 
         return None, None
 
@@ -310,11 +289,7 @@ def load_token():
 
                 data = json.load(f)
 
-                if (
-                    data.get("date")
-                    ==
-                    get_ist_now().strftime("%Y-%m-%d")
-                ):
+                if data.get("date") == get_ist_now().strftime("%Y-%m-%d"):
 
                     return data.get("token", "")
 
@@ -329,11 +304,8 @@ def save_token(token):
     try:
 
         data = {
-            "date":
-                get_ist_now().strftime("%Y-%m-%d"),
-
-            "token":
-                token
+            "date": get_ist_now().strftime("%Y-%m-%d"),
+            "token": token
         }
 
         with open(TOKEN_FILE, "w") as f:
@@ -358,15 +330,9 @@ def load_blacklist():
 
                 data = json.load(f)
 
-                if (
-                    data.get("date")
-                    ==
-                    get_ist_now().strftime("%Y-%m-%d")
-                ):
+                if data.get("date") == get_ist_now().strftime("%Y-%m-%d"):
 
-                    return set(
-                        data.get("keys", [])
-                    )
+                    return set(data.get("keys", []))
 
         except:
             pass
@@ -379,11 +345,8 @@ def save_blacklist(keys):
     try:
 
         data = {
-            "date":
-                get_ist_now().strftime("%Y-%m-%d"),
-
-            "keys":
-                list(keys)
+            "date": get_ist_now().strftime("%Y-%m-%d"),
+            "keys": list(keys)
         }
 
         with open(BLACKLIST_FILE, "w") as f:
@@ -408,38 +371,29 @@ def load_nse_json():
 
         try:
 
-            df = pd.read_json(
-                NSE_JSON_PATH
-            )
+            df = pd.read_json(NSE_JSON_PATH)
 
             if "segment" in df.columns:
 
-                df = df[
-                    df["segment"] == "NSE_FO"
-                ]
+                df = df[df["segment"] == "NSE_FO"]
 
-            df["expiry_dt"] = (
-                pd.to_datetime(
-                    df["expiry"],
-                    unit="ms"
-                ).dt.normalize()
-            )
+            df["expiry_dt"] = pd.to_datetime(
+                df["expiry"],
+                unit="ms"
+            ).dt.normalize()
 
             return df
 
         except Exception as e:
 
-            st.error(
-                f"Error loading NSE.json: {e}"
-            )
+            st.error(f"Error loading NSE.json: {e}")
 
             return pd.DataFrame()
 
     else:
 
         st.error(
-            f"NSE.json not found at "
-            f"{NSE_JSON_PATH}"
+            f"NSE.json not found at {NSE_JSON_PATH}"
         )
 
         return pd.DataFrame()
@@ -457,9 +411,7 @@ def process_bhavcopy(
 
     try:
 
-        df_bhav = pd.read_csv(
-            bhav_file
-        )
+        df_bhav = pd.read_csv(bhav_file)
 
         required_cols = [
             "FinInstrmTp",
@@ -479,8 +431,8 @@ def process_bhavcopy(
         ):
 
             st.error(
-                "Uploaded file missing "
-                f"required columns: {required_cols}"
+                f"Uploaded file missing required columns: "
+                f"{required_cols}"
             )
 
             return pd.DataFrame()
@@ -490,17 +442,12 @@ def process_bhavcopy(
         # ====================================================
 
         futures = df_bhav[
-            df_bhav["FinInstrmTp"].isin(
-                ["STF", "IDF"]
-            )
+            df_bhav["FinInstrmTp"].isin(["STF", "IDF"])
         ].copy()
 
         if futures.empty:
 
-            st.warning(
-                "No Futures data found "
-                "in uploaded file."
-            )
+            st.warning("No Futures data found.")
 
             return pd.DataFrame()
 
@@ -528,15 +475,12 @@ def process_bhavcopy(
         if futures.empty:
 
             st.warning(
-                "No future expiries found "
-                "in the uploaded file."
+                "No future expiries found."
             )
 
             return pd.DataFrame()
 
-        futures = futures.sort_values(
-            "XpryDt"
-        )
+        futures = futures.sort_values("XpryDt")
 
         available_expiries = sorted(
             futures["XpryDt"].unique()
@@ -544,34 +488,22 @@ def process_bhavcopy(
 
         if not available_expiries:
 
-            st.warning(
-                "No future expiry dates found "
-                "in uploaded file."
-            )
+            return pd.DataFrame()
 
-            return pd.DataFrame(), None, []
-
-        if (
-            target_expiry_index
-            >= len(available_expiries)
+        if target_expiry_index >= len(
+            available_expiries
         ):
 
-            target_expiry = (
-                available_expiries[-1]
-            )
+            target_expiry = available_expiries[-1]
 
         else:
 
-            target_expiry = (
-                available_expiries[
-                    target_expiry_index
-                ]
-            )
+            target_expiry = available_expiries[
+                target_expiry_index
+            ]
 
         near_futures = futures[
-            futures["XpryDt"]
-            ==
-            target_expiry
+            futures["XpryDt"] == target_expiry
         ].copy()
 
         near_futures = near_futures[
@@ -584,11 +516,8 @@ def process_bhavcopy(
 
         near_futures = near_futures.rename(
             columns={
-                "ClsPric":
-                    "FuturePrice",
-
-                "XpryDt":
-                    "FutureExpiryDate"
+                "ClsPric": "FuturePrice",
+                "XpryDt": "FutureExpiryDate"
             }
         )
 
@@ -597,23 +526,14 @@ def process_bhavcopy(
         # ====================================================
 
         options = df_bhav[
-            df_bhav["OptnTp"].isin(
-                ["CE", "PE"]
-            )
+            df_bhav["OptnTp"].isin(["CE", "PE"])
         ].copy()
 
         if options.empty:
 
-            st.warning(
-                "No Options data found "
-                "in uploaded file."
-            )
+            st.warning("No Options data found.")
 
-            return (
-                pd.DataFrame(),
-                target_expiry,
-                available_expiries
-            )
+            return pd.DataFrame()
 
         options["XpryDt"] = pd.to_datetime(
             options["XpryDt"]
@@ -627,42 +547,32 @@ def process_bhavcopy(
 
         merged = merged[
             merged["XpryDt"]
-            ==
-            merged["FutureExpiryDate"]
+            == merged["FutureExpiryDate"]
         ]
 
         # ====================================================
         # ATM
         # ====================================================
 
-        merged["Diff"] = (
-            abs(
-                merged["StrkPric"]
-                -
-                merged["FuturePrice"]
-            )
+        merged["Diff"] = abs(
+            merged["StrkPric"]
+            - merged["FuturePrice"]
         )
 
-        best_strikes = (
-            merged[
-                [
-                    "TckrSymb",
-                    "StrkPric",
-                    "Diff"
-                ]
+        best_strikes = merged[
+            [
+                "TckrSymb",
+                "StrkPric",
+                "Diff"
             ]
-            .drop_duplicates()
-        )
+        ].drop_duplicates()
 
-        best_strikes = (
-            best_strikes
-            .sort_values(
-                by=[
-                    "TckrSymb",
-                    "Diff",
-                    "StrkPric"
-                ]
-            )
+        best_strikes = best_strikes.sort_values(
+            by=[
+                "TckrSymb",
+                "Diff",
+                "StrkPric"
+            ]
         )
 
         best_strikes = (
@@ -707,43 +617,34 @@ def process_bhavcopy(
         )
 
         # ====================================================
-        # MERGE WITH NSE JSON
+        # MERGE NSE JSON
         # ====================================================
 
         result = pd.merge(
-
             atm_rows,
-
             df_json,
-
             left_on=[
                 "TckrSymb",
                 "StrkPric",
                 "OptnTp",
                 "XpryDt"
             ],
-
             right_on=[
                 "underlying_symbol",
                 "strike_price",
                 "instrument_type",
                 "expiry_dt"
             ],
-
             how="inner"
         )
 
-        if (
-            result.empty
-            and not atm_rows.empty
-        ):
+        if result.empty and not atm_rows.empty:
 
             st.error(
-                "Data mismatch: Found options "
-                "in Bhavcopy but couldn't find "
-                "them in NSE.json. Please update "
-                "NSE.json via the sidebar."
+                "Data mismatch between Bhavcopy and NSE.json."
             )
+
+            return pd.DataFrame()
 
         final_df = result[
             [
@@ -762,29 +663,14 @@ def process_bhavcopy(
 
         final_df = final_df.rename(
             columns={
-                "TckrSymb":
-                    "Symbol",
-
-                "XpryDt":
-                    "ExpiryDate",
-
-                "StrkPric":
-                    "StrikePrice",
-
-                "OptnTp":
-                    "OptionType",
-
-                "ClsPric":
-                    "Trigger",
-
-                "HghPric":
-                    "HighPrice",
-
-                "LwPric":
-                    "LowPrice",
-
-                "LastPric":
-                    "LastPrice"
+                "TckrSymb": "Symbol",
+                "XpryDt": "ExpiryDate",
+                "StrkPric": "StrikePrice",
+                "OptnTp": "OptionType",
+                "ClsPric": "Trigger",
+                "HghPric": "HighPrice",
+                "LwPric": "LowPrice",
+                "LastPric": "LastPrice"
             }
         )
 
@@ -805,15 +691,12 @@ def process_bhavcopy(
         )
 
         # ====================================================
-        # USER RULE
         # TRIGGER x 2
         # ====================================================
 
-        if "Trigger" in final_df.columns:
-
-            final_df["Trigger"] = (
-                final_df["Trigger"] * 2
-            )
+        final_df["Trigger"] = (
+            final_df["Trigger"] * 2
+        )
 
         return (
             final_df,
@@ -844,6 +727,7 @@ def fetch_ltp(
 ):
 
     if not token:
+
         return {}
 
     url = (
@@ -852,11 +736,8 @@ def fetch_ltp(
     )
 
     headers = {
-        "Accept":
-            "application/json",
-
-        "Authorization":
-            f"Bearer {token}"
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}"
     }
 
     batch_size = 50
@@ -875,8 +756,7 @@ def fetch_ltp(
     def fetch_batch(batch):
 
         params = {
-            "instrument_key":
-                ",".join(batch)
+            "instrument_key": ",".join(batch)
         }
 
         try:
@@ -892,11 +772,7 @@ def fetch_ltp(
 
                 data = response.json()
 
-                if (
-                    data.get("status")
-                    ==
-                    "success"
-                ):
+                if data.get("status") == "success":
 
                     quotes = data.get(
                         "data",
@@ -905,20 +781,14 @@ def fetch_ltp(
 
                     result = {}
 
-                    for key, details in (
-                        quotes.items()
-                    ):
+                    for key, details in quotes.items():
 
-                        inst_token = (
-                            details.get(
-                                "instrument_token"
-                            )
+                        inst_token = details.get(
+                            "instrument_token"
                         )
 
-                        last_price = (
-                            details.get(
-                                "last_price"
-                            )
+                        last_price = details.get(
+                            "last_price"
                         )
 
                         if inst_token is not None:
@@ -952,9 +822,7 @@ def fetch_ltp(
 
             try:
 
-                batch_result = (
-                    future.result()
-                )
+                batch_result = future.result()
 
                 if batch_result:
 
@@ -969,135 +837,94 @@ def fetch_ltp(
 
 
 # ============================================================
-# PRIORITY SORT
+# ⭐ PRIORITY SORT
+#
+# 90% - 110% FIRST
+# ONLY TOP 10 FROM THIS ZONE
+# ASCENDING ORDER
+#
+# THEN REMAINING DATA
+# NORMAL DESCENDING ORDER
 # ============================================================
 
-def priority_sort(data):
+def priority_sort_90_110(df):
 
-    """
-    PURPOSE:
+    if df.empty:
 
-    1. Find rows between 90% and 110%.
-    2. Show maximum 10 of those rows first.
-    3. Show all remaining rows afterwards.
-    4. Remaining rows retain normal change % descending order.
+        return df
 
-    This is applied separately to CE and PE.
-    """
+    # Make sure numeric
+    df = df.copy()
 
-    if data.empty:
-        return data
-
-    data = data.copy()
-
-    # --------------------------------------------------------
-    # Make sure change % is numeric
-    # --------------------------------------------------------
-
-    data["change %"] = pd.to_numeric(
-        data["change %"],
+    df["change %"] = pd.to_numeric(
+        df["change %"],
         errors="coerce"
-    ).fillna(0.0)
+    )
 
     # --------------------------------------------------------
-    # Identify 90% - 110% range
+    # PRIORITY ZONE
+    # 90% <= Change <= 110%
     # --------------------------------------------------------
 
-    data["_priority"] = (
-        (data["change %"] >= PRIORITY_MIN)
+    priority_df = df[
+        (df["change %"] >= 90)
         &
-        (data["change %"] <= PRIORITY_MAX)
-    )
-
-    # --------------------------------------------------------
-    # Get only priority rows
-    # --------------------------------------------------------
-
-    priority_df = data[
-        data["_priority"]
+        (df["change %"] <= 110)
     ].copy()
-
-    # Sort priority rows
-    # Highest percentage first
-    priority_df = (
-        priority_df
-        .sort_values(
-            by="change %",
-            ascending=False
-        )
-    )
 
     # --------------------------------------------------------
     # TOP 10 ONLY
+    # ASCENDING
+    #
+    # Example:
+    # 90.25
+    # 91.40
+    # 94.80
+    # 98.50
+    # 100.10
+    # 102.20
+    # ...
     # --------------------------------------------------------
 
-    priority_top10 = (
-        priority_df
-        .head(PRIORITY_LIMIT)
-        .copy()
+    priority_df = priority_df.sort_values(
+        by="change %",
+        ascending=True
+    ).head(10)
+
+    # Save instrument keys of priority rows
+    priority_keys = set(
+        priority_df["instrument_key"]
+        .astype(str)
     )
 
     # --------------------------------------------------------
-    # Remove those exact rows from normal list
+    # REMAINING DATA
+    # NORMAL DESCENDING ORDER
     # --------------------------------------------------------
 
-    if not priority_top10.empty:
+    remaining_df = df[
+        ~df["instrument_key"]
+        .astype(str)
+        .isin(priority_keys)
+    ].copy()
 
-        # Use index so duplicate instrument
-        # keys don't accidentally remove other rows
-        priority_indexes = (
-            priority_top10.index
-        )
-
-        remaining_df = data[
-            ~data.index.isin(
-                priority_indexes
-            )
-        ].copy()
-
-    else:
-
-        remaining_df = data.copy()
-
-    # --------------------------------------------------------
-    # Normal scanner order for remaining rows
-    # --------------------------------------------------------
-
-    remaining_df = (
-        remaining_df
-        .sort_values(
-            by="change %",
-            ascending=False
-        )
+    remaining_df = remaining_df.sort_values(
+        by="change %",
+        ascending=False
     )
 
     # --------------------------------------------------------
-    # Add internal priority flag
-    # --------------------------------------------------------
-
-    priority_top10["_priority_display"] = True
-
-    remaining_df["_priority_display"] = False
-
-    # --------------------------------------------------------
-    # Combine
+    # COMBINE
+    # PRIORITY FIRST
+    # REMAINING SECOND
     # --------------------------------------------------------
 
     final_df = pd.concat(
         [
-            priority_top10,
+            priority_df,
             remaining_df
         ],
-        axis=0
-    )
-
-    # --------------------------------------------------------
-    # Remove helper column
-    # --------------------------------------------------------
-
-    final_df = final_df.drop(
-        columns=["_priority"],
-        errors="ignore"
+        ignore_index=True
     )
 
     return final_df
@@ -1114,7 +941,7 @@ def display_option_chain(
 ):
 
     st.caption(
-        "Last Updated: "
+        f"Last Updated: "
         f"{get_ist_now().strftime('%H:%M:%S')} IST"
     )
 
@@ -1122,8 +949,7 @@ def display_option_chain(
 
         st.info(
             "No data to display. "
-            "Please upload a valid "
-            "Bhavcopy in the sidebar."
+            "Please upload a valid Bhavcopy."
         )
 
         return
@@ -1157,10 +983,8 @@ def display_option_chain(
 
         is_market_hours = (
             start_time
-            <=
-            current_time
-            <=
-            end_time
+            <= current_time
+            <= end_time
         )
 
         ltp_cache = load_ltp_cache()
@@ -1171,26 +995,16 @@ def display_option_chain(
             if k not in ltp_cache
         ]
 
-        force_refresh = (
-            st.session_state.get(
-                "force_refresh_ltp",
-                False
-            )
+        force_refresh = st.session_state.get(
+            "force_refresh_ltp",
+            False
         )
 
         should_fetch = False
 
-        # ----------------------------------------------------
-        # Market hours = live update
-        # ----------------------------------------------------
-
         if is_market_hours:
 
             should_fetch = True
-
-        # ----------------------------------------------------
-        # Manual refresh
-        # ----------------------------------------------------
 
         elif force_refresh:
 
@@ -1200,27 +1014,17 @@ def display_option_chain(
                 "force_refresh_ltp"
             ] = False
 
-        # ----------------------------------------------------
-        # Missing data
-        # ----------------------------------------------------
-
         elif missing_keys:
 
             should_fetch = True
 
-        # ----------------------------------------------------
-        # Fetch
-        # ----------------------------------------------------
-
         if should_fetch:
 
-            if is_market_hours:
-
-                keys_to_fetch = all_keys
-
-            else:
-
-                keys_to_fetch = missing_keys
+            keys_to_fetch = (
+                all_keys
+                if is_market_hours
+                else missing_keys
+            )
 
             fetched_data = fetch_ltp(
                 keys_to_fetch,
@@ -1237,16 +1041,8 @@ def display_option_chain(
                     load_ltp_cache()
                 )
 
-        # ----------------------------------------------------
-        # Read cache
-        # ----------------------------------------------------
-
         ltp_data = {
-            k:
-                ltp_cache.get(
-                    k,
-                    0.0
-                )
+            k: ltp_cache.get(k, 0.0)
             for k in all_keys
         }
 
@@ -1271,8 +1067,7 @@ def display_option_chain(
 
     if (
         key_suffix == "Intraday"
-        and
-        "Camarilla_R4" in df.columns
+        and "Camarilla_R4" in df.columns
     ):
 
         df["Trigger"] = (
@@ -1287,7 +1082,7 @@ def display_option_chain(
 
         try:
 
-            ocp = float(
+            trigger = float(
                 row["Trigger"]
             )
 
@@ -1295,16 +1090,12 @@ def display_option_chain(
                 row["ltp"]
             )
 
-            if (
-                ocp > 0
-                and
-                ltp > 0
-            ):
+            if trigger > 0 and ltp > 0:
 
                 return (
                     ltp
                     /
-                    ocp
+                    trigger
                     *
                     100
                 )
@@ -1315,15 +1106,9 @@ def display_option_chain(
 
             return 0.0
 
-    df["change_val"] = (
-        df.apply(
-            calculate_numeric_change,
-            axis=1
-        )
-    )
-
-    df["change %"] = (
-        df["change_val"]
+    df["change %"] = df.apply(
+        calculate_numeric_change,
+        axis=1
     )
 
     # ========================================================
@@ -1343,15 +1128,11 @@ def display_option_chain(
             "%H:%M"
         ).time()
 
-        # Before 09:30 blacklist >= 100%
         if current_time < cutoff_time:
 
-            violators = (
-                df[
-                    df["change %"] >= 100
-                ]["instrument_key"]
-                .tolist()
-            )
+            violators = df[
+                df["change %"] >= 100
+            ]["instrument_key"].tolist()
 
             if violators:
 
@@ -1363,17 +1144,15 @@ def display_option_chain(
                     blacklist
                 )
 
-        # Remove blacklist
         if blacklist:
 
             df = df[
-                ~df[
-                    "instrument_key"
-                ].isin(blacklist)
+                ~df["instrument_key"]
+                .isin(blacklist)
             ]
 
     # ========================================================
-    # SPLIT CE / PE
+    # CALL / PUT
     # ========================================================
 
     calls_df = df[
@@ -1385,14 +1164,20 @@ def display_option_chain(
     ].copy()
 
     # ========================================================
-    # APPLY 90-110 PRIORITY LOGIC
+    # ⭐ NEW PRIORITY ORDER
+    #
+    # 90-110 FIRST
+    # ASCENDING
+    # TOP 10
+    #
+    # REMAINING = DESCENDING
     # ========================================================
 
-    calls_df = priority_sort(
+    calls_df = priority_sort_90_110(
         calls_df
     )
 
-    puts_df = priority_sort(
+    puts_df = priority_sort_90_110(
         puts_df
     )
 
@@ -1409,7 +1194,7 @@ def display_option_chain(
     ]
 
     # ========================================================
-    # STYLING
+    # CELL COLORS
     # ========================================================
 
     def color_change(val):
@@ -1418,52 +1203,53 @@ def display_option_chain(
 
             val = float(val)
 
+            # 100% and above
+            if val >= 100:
+
+                return (
+                    "background-color: darkgreen;"
+                    "color: white;"
+                )
+
+            # 90% to below 100%
+            elif val >= 90:
+
+                return (
+                    "background-color: #fff2cc;"
+                    "color: black;"
+                )
+
         except:
-
-            return ""
-
-        # ----------------------------------------------------
-        # 90 - 110 = PRIORITY
-        # ----------------------------------------------------
-
-        if (
-            PRIORITY_MIN
-            <=
-            val
-            <=
-            PRIORITY_MAX
-        ):
-
-            return (
-                "background-color: #fff2cc;"
-                "color: #000000;"
-                "font-weight: bold;"
-            )
-
-        # ----------------------------------------------------
-        # Above 110
-        # ----------------------------------------------------
-
-        elif val > PRIORITY_MAX:
-
-            return (
-                "background-color: darkgreen;"
-                "color: white;"
-                "font-weight: bold;"
-            )
-
-        # ----------------------------------------------------
-        # 80 - 90
-        # ----------------------------------------------------
-
-        elif val >= 80:
-
-            return (
-                "background-color: lightgreen;"
-                "color: black;"
-            )
+            pass
 
         return ""
+
+    # ========================================================
+    # PRIORITY ROW COLOR
+    # ========================================================
+
+    def priority_row(row):
+
+        try:
+
+            value = float(
+                row["change %"]
+            )
+
+            if 90 <= value <= 110:
+
+                return [
+                    "background-color: #fff8dc;"
+                    for _ in row
+                ]
+
+        except:
+            pass
+
+        return [
+            ""
+            for _ in row
+        ]
 
     # ========================================================
     # FORMAT
@@ -1471,18 +1257,35 @@ def display_option_chain(
 
     format_dict = {
 
-        "change %":
-            "{:.2f}%",
+        "change %": "{:.2f}%",
 
-        "Trigger":
-            "{:.2f}",
+        "Trigger": "{:.2f}",
 
-        "ltp":
-            "{:.2f}",
+        "ltp": "{:.2f}",
 
-        "StrikePrice":
-            "{:.2f}"
+        "StrikePrice": "{:.2f}"
+
     }
+
+    # ========================================================
+    # NUMBER OF PRIORITY OPTIONS
+    # ========================================================
+
+    ce_priority_count = len(
+        calls_df[
+            (calls_df["change %"] >= 90)
+            &
+            (calls_df["change %"] <= 110)
+        ].head(10)
+    )
+
+    pe_priority_count = len(
+        puts_df[
+            (puts_df["change %"] >= 90)
+            &
+            (puts_df["change %"] <= 110)
+        ].head(10)
+    )
 
     # ========================================================
     # TWO COLUMNS
@@ -1496,57 +1299,35 @@ def display_option_chain(
 
     with col1:
 
-        st.subheader(
-            "Calls (CE)"
+        st.subheader("Calls (CE)")
+
+        st.caption(
+            f"⭐ Priority: {ce_priority_count} "
+            f"options in 90–110% zone "
+            f"— sorted lowest to highest"
         )
 
-        # Priority count
-        ce_priority_count = (
-            calls_df[
-                calls_df[
-                    "_priority_display"
-                ] == True
-            ].shape[0]
-        )
-
-        if ce_priority_count > 0:
-
-            st.caption(
-                f"⭐ Priority: "
-                f"{ce_priority_count} "
-                f"options in 90–110% zone"
-            )
-
-        st.dataframe(
-
-            calls_df[
-                display_cols
-            ]
+        styled_calls = (
+            calls_df[display_cols]
             .style
             .map(
                 color_change,
                 subset=["change %"]
             )
-            .format(
-                format_dict
-            )
+            .format(format_dict)
             .set_properties(
                 **{
-                    "font-weight":
-                        "600",
-
-                    "text-align":
-                        "center",
-
-                    "font-size":
-                        "16px"
+                    "font-weight": "600",
+                    "text-align": "center",
+                    "font-size": "16px"
                 }
-            ),
+            )
+        )
 
+        st.dataframe(
+            styled_calls,
             hide_index=True,
-
             use_container_width=True,
-
             height=1800
         )
 
@@ -1556,95 +1337,72 @@ def display_option_chain(
 
     with col2:
 
-        st.subheader(
-            "Puts (PE)"
+        st.subheader("Puts (PE)")
+
+        st.caption(
+            f"⭐ Priority: {pe_priority_count} "
+            f"options in 90–110% zone "
+            f"— sorted lowest to highest"
         )
 
-        # Priority count
-        pe_priority_count = (
-            puts_df[
-                puts_df[
-                    "_priority_display"
-                ] == True
-            ].shape[0]
-        )
-
-        if pe_priority_count > 0:
-
-            st.caption(
-                f"⭐ Priority: "
-                f"{pe_priority_count} "
-                f"options in 90–110% zone"
-            )
-
-        st.dataframe(
-
-            puts_df[
-                display_cols
-            ]
+        styled_puts = (
+            puts_df[display_cols]
             .style
             .map(
                 color_change,
                 subset=["change %"]
             )
-            .format(
-                format_dict
-            )
+            .format(format_dict)
             .set_properties(
                 **{
-                    "font-weight":
-                        "600",
-
-                    "text-align":
-                        "center",
-
-                    "font-size":
-                        "16px"
+                    "font-weight": "600",
+                    "text-align": "center",
+                    "font-size": "16px"
                 }
-            ),
+            )
+        )
 
+        st.dataframe(
+            styled_puts,
             hide_index=True,
-
             use_container_width=True,
-
             height=1800
         )
 
 
 # ============================================================
-# CONFIGURATION
+# CLIENT / ADMIN VIEW
 # ============================================================
 
 is_client_view = (
-    "UPSTOX_ACCESS_TOKEN"
-    in st.secrets
+    "UPSTOX_ACCESS_TOKEN" in st.secrets
     and
     st.secrets[
         "UPSTOX_ACCESS_TOKEN"
-    ].strip()
-    != ""
+    ].strip() != ""
 )
 
 
-# ============================================================
-# CLIENT VIEW
-# ============================================================
-
 if is_client_view:
 
-    access_token = (
-        st.secrets[
-            "UPSTOX_ACCESS_TOKEN"
-        ]
-    )
+    # ========================================================
+    # CLIENT
+    # ========================================================
 
-    st.markdown("""
+    access_token = st.secrets[
+        "UPSTOX_ACCESS_TOKEN"
+    ]
+
+    st.markdown(
+        """
         <style>
-            [data-testid="stSidebar"] {
-                display: none;
-            }
+        [data-testid="stSidebar"] {
+            display: none;
+        }
         </style>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True
+    )
 
     auto_refresh = True
 
@@ -1655,21 +1413,17 @@ if is_client_view:
     expiry_type = "Current Month"
 
 
-# ============================================================
-# ADMIN VIEW
-# ============================================================
-
 else:
+
+    # ========================================================
+    # ADMIN SIDEBAR
+    # ========================================================
 
     with st.sidebar:
 
         st.header(
             "Configuration"
         )
-
-        # ----------------------------------------------------
-        # TOKEN
-        # ----------------------------------------------------
 
         saved_token = load_token()
 
@@ -1691,49 +1445,34 @@ else:
 
         st.markdown("---")
 
-        # ----------------------------------------------------
-        # EXPIRY
-        # ----------------------------------------------------
-
         st.header(
             "Expiry Settings"
         )
 
         expiry_type = st.radio(
-
             "Select Expiry Month",
-
             options=[
                 "Current Month",
                 "Next Month"
             ],
-
-            index=0,
-
-            help=(
-                "Choose which expiry "
-                "month to display data for."
-            )
+            index=0
         )
 
         target_expiry_idx = (
             0
-            if expiry_type
-            ==
-            "Current Month"
-            else
-            1
+            if expiry_type == "Current Month"
+            else 1
         )
 
         st.markdown("---")
 
-        # ----------------------------------------------------
-        # DATA MANAGEMENT
-        # ----------------------------------------------------
-
         st.header(
             "Data Management"
         )
+
+        # ====================================================
+        # REFRESH
+        # ====================================================
 
         if st.button(
             "⚡ Refresh LTP Now",
@@ -1746,16 +1485,17 @@ else:
 
             st.rerun()
 
-        # ----------------------------------------------------
+        # ====================================================
         # NSE JSON
-        # ----------------------------------------------------
+        # ====================================================
 
         st.subheader(
             "NSE Instrument JSON"
         )
 
         if st.button(
-            "🔄 Download Latest"
+            "🔄 Download Latest",
+            use_container_width=True
         ):
 
             try:
@@ -1772,7 +1512,7 @@ else:
 
                     headers = {
                         "User-Agent":
-                            "Mozilla/5.0"
+                        "Mozilla/5.0"
                     }
 
                     response = requests.get(
@@ -1800,7 +1540,7 @@ else:
                         st.cache_data.clear()
 
                         st.success(
-                            "Updated successfully!"
+                            "NSE.json updated successfully!"
                         )
 
                         time.sleep(1)
@@ -1810,8 +1550,7 @@ else:
                     else:
 
                         st.error(
-                            "Failed to download. "
-                            f"Status: "
+                            f"Download failed: "
                             f"{response.status_code}"
                         )
 
@@ -1822,12 +1561,10 @@ else:
                 )
 
         # ====================================================
-        # MONTHLY UPLOAD
+        # MONTHLY
         # ====================================================
 
-        st.subheader(
-            "Monthly"
-        )
+        st.subheader("Monthly")
 
         up_m = st.file_uploader(
             "Upload Monthly Bhavcopy",
@@ -1868,8 +1605,8 @@ else:
                     )
 
                 st.success(
-                    f"Monthly file updated "
-                    f"from {csv_name}!"
+                    f"Monthly file updated: "
+                    f"{csv_name}"
                 )
 
         meta = load_meta()
@@ -1887,26 +1624,11 @@ else:
                 f"{meta['Monthly']}"
             )
 
-        elif os.path.exists(
-            FILES["Monthly"]
-        ):
-
-            m_time = os.path.getmtime(
-                FILES["Monthly"]
-            )
-
-            st.caption(
-                "📅 Last Updated: "
-                f"{datetime.fromtimestamp(m_time).strftime('%Y-%m-%d %H:%M')}"
-            )
-
         # ====================================================
-        # WEEKLY UPLOAD
+        # WEEKLY
         # ====================================================
 
-        st.subheader(
-            "Weekly"
-        )
+        st.subheader("Weekly")
 
         up_w = st.file_uploader(
             "Upload Weekly Bhavcopy",
@@ -1947,8 +1669,8 @@ else:
                     )
 
                 st.success(
-                    f"Weekly file updated "
-                    f"from {csv_name}!"
+                    f"Weekly file updated: "
+                    f"{csv_name}"
                 )
 
         if (
@@ -1964,26 +1686,11 @@ else:
                 f"{meta['Weekly']}"
             )
 
-        elif os.path.exists(
-            FILES["Weekly"]
-        ):
-
-            w_time = os.path.getmtime(
-                FILES["Weekly"]
-            )
-
-            st.caption(
-                "📅 Last Updated: "
-                f"{datetime.fromtimestamp(w_time).strftime('%Y-%m-%d %H:%M')}"
-            )
-
         # ====================================================
-        # INTRADAY UPLOAD
+        # INTRADAY
         # ====================================================
 
-        st.subheader(
-            "Intraday"
-        )
+        st.subheader("Intraday")
 
         up_i = st.file_uploader(
             "Upload Intraday Bhavcopy",
@@ -2024,8 +1731,8 @@ else:
                     )
 
                 st.success(
-                    f"Intraday file updated "
-                    f"from {csv_name}!"
+                    f"Intraday file updated: "
+                    f"{csv_name}"
                 )
 
         if (
@@ -2039,19 +1746,6 @@ else:
             st.caption(
                 f"📅 Data Date: "
                 f"{meta['Intraday']}"
-            )
-
-        elif os.path.exists(
-            FILES["Intraday"]
-        ):
-
-            i_time = os.path.getmtime(
-                FILES["Intraday"]
-            )
-
-            st.caption(
-                "📅 Last Updated: "
-                f"{datetime.fromtimestamp(i_time).strftime('%Y-%m-%d %H:%M')}"
             )
 
         # ====================================================
@@ -2086,10 +1780,6 @@ st.title(
 )
 
 
-# ============================================================
-# LOAD NSE JSON
-# ============================================================
-
 nse_json_df = load_nse_json()
 
 
@@ -2116,7 +1806,7 @@ if not nse_json_df.empty:
     with tab1:
 
         st.header(
-            "Monthly Options "
+            f"Monthly Options "
             f"({expiry_type})"
         )
 
@@ -2134,14 +1824,14 @@ if not nse_json_df.empty:
                         FILES["Monthly"],
                         nse_json_df,
                         target_expiry_index=
-                            target_expiry_idx
+                        target_expiry_idx
                     )
                 )
 
                 if target_exp:
 
                     st.info(
-                        "📅 Displaying Expiry: "
+                        f"📅 Displaying Expiry: "
                         f"**{target_exp.strftime('%d-%b-%Y')}**"
                     )
 
@@ -2156,8 +1846,7 @@ if not nse_json_df.empty:
         else:
 
             st.warning(
-                "Monthly Bhavcopy file not found. "
-                "Please upload in the sidebar."
+                "Monthly Bhavcopy file not found."
             )
 
     # ========================================================
@@ -2167,7 +1856,7 @@ if not nse_json_df.empty:
     with tab2:
 
         st.header(
-            "Weekly Options "
+            f"Weekly Options "
             f"({expiry_type})"
         )
 
@@ -2185,14 +1874,14 @@ if not nse_json_df.empty:
                         FILES["Weekly"],
                         nse_json_df,
                         target_expiry_index=
-                            target_expiry_idx
+                        target_expiry_idx
                     )
                 )
 
                 if target_exp:
 
                     st.info(
-                        "📅 Displaying Expiry: "
+                        f"📅 Displaying Expiry: "
                         f"**{target_exp.strftime('%d-%b-%Y')}**"
                     )
 
@@ -2207,8 +1896,7 @@ if not nse_json_df.empty:
         else:
 
             st.warning(
-                "Weekly Bhavcopy file not found. "
-                "Please upload in the sidebar."
+                "Weekly Bhavcopy file not found."
             )
 
     # ========================================================
@@ -2241,7 +1929,7 @@ if not nse_json_df.empty:
                 if target_exp:
 
                     st.info(
-                        "📅 Displaying Expiry: "
+                        f"📅 Displaying Expiry: "
                         f"**{target_exp.strftime('%d-%b-%Y')}**"
                     )
 
@@ -2256,14 +1944,11 @@ if not nse_json_df.empty:
         else:
 
             st.warning(
-                "Intraday Bhavcopy file not found. "
-                "Please upload in the sidebar."
+                "Intraday Bhavcopy file not found."
             )
-
 
 else:
 
     st.error(
-        "Critical Error: "
-        "NSE.json could not be loaded."
+        "Critical Error: NSE.json could not be loaded."
     )
