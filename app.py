@@ -149,6 +149,11 @@ LTP_CACHE_FILE = os.path.join(
     "ltp_cache.json"
 )
 
+TRIGGER_ALERT_FILE = os.path.join(
+    DATA_DIR,
+    "trigger_alert_state.json"
+)
+
 
 FILES = {
     "Monthly": os.path.join(DATA_DIR, "monthly.csv"),
@@ -161,12 +166,12 @@ FILES = {
 # PRIORITY SETTINGS
 # ============================================================
 
-# Your requested range
+# Kept only for the visual highlight band in the table
+# (90-110% shows amber, >110% shows dark green, 80-90% shows
+# light green). Row ORDERING no longer uses this - the table
+# is sorted purely by change % descending now.
 PRIORITY_MIN = 90.0
 PRIORITY_MAX = 110.0
-
-# Maximum priority stocks shown first
-PRIORITY_LIMIT = 10
 
 
 # ============================================================
@@ -387,6 +392,62 @@ def save_blacklist(keys):
         }
 
         with open(BLACKLIST_FILE, "w") as f:
+
+            json.dump(data, f)
+
+    except:
+        pass
+
+
+# ============================================================
+# TELEGRAM TRIGGER-ALERT STATE
+#
+# Persisted to disk (not just st.session_state) so alert
+# de-duplication survives Streamlit Cloud restarts / fragment
+# reruns. Resets automatically each new trading day.
+# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly/
+# Intraday tabs track their own alert history independently.
+# ============================================================
+
+def load_trigger_alert_state():
+
+    if os.path.exists(TRIGGER_ALERT_FILE):
+
+        try:
+
+            with open(TRIGGER_ALERT_FILE, "r") as f:
+
+                data = json.load(f)
+
+                if (
+                    data.get("date")
+                    ==
+                    get_ist_now().strftime("%Y-%m-%d")
+                ):
+
+                    return set(
+                        data.get("keys", [])
+                    )
+
+        except:
+            pass
+
+    return set()
+
+
+def save_trigger_alert_state(keys):
+
+    try:
+
+        data = {
+            "date":
+                get_ist_now().strftime("%Y-%m-%d"),
+
+            "keys":
+                list(keys)
+        }
+
+        with open(TRIGGER_ALERT_FILE, "w") as f:
 
             json.dump(data, f)
 
@@ -969,138 +1030,126 @@ def fetch_ltp(
 
 
 # ============================================================
-# PRIORITY SORT
+# TELEGRAM TRIGGER BOT
+#
+# Sends a Telegram alert the moment an option's change %
+# (LTP / Trigger x 100) crosses 100% - i.e. LTP has crossed
+# the Trigger price. Fires once per option per tab per day
+# (de-duped via TRIGGER_ALERT_FILE), regardless of the
+# 90-110% highlight band used purely for visual styling.
 # ============================================================
 
-def priority_sort(data):
+def send_telegram_alert(bot_token, chat_id, message):
 
-    """
-    PURPOSE:
+    if not bot_token or not chat_id:
+        return False, "Missing bot token or chat ID"
 
-    1. Find rows between 90% and 110%.
-    2. Show maximum 10 of those rows first.
-    3. Show all remaining rows afterwards.
-    4. Remaining rows retain normal change % descending order.
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
-    This is applied separately to CE and PE.
-    """
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML"
+    }
 
-    if data.empty:
-        return data
+    try:
 
-    data = data.copy()
-
-    # --------------------------------------------------------
-    # Make sure change % is numeric
-    # --------------------------------------------------------
-
-    data["change %"] = pd.to_numeric(
-        data["change %"],
-        errors="coerce"
-    ).fillna(0.0)
-
-    # --------------------------------------------------------
-    # Identify 90% - 110% range
-    # --------------------------------------------------------
-
-    data["_priority"] = (
-        (data["change %"] >= PRIORITY_MIN)
-        &
-        (data["change %"] <= PRIORITY_MAX)
-    )
-
-    # --------------------------------------------------------
-    # Get only priority rows
-    # --------------------------------------------------------
-
-    priority_df = data[
-        data["_priority"]
-    ].copy()
-
-    # Sort priority rows
-    # Highest percentage first
-    priority_df = (
-        priority_df
-        .sort_values(
-            by="change %",
-            ascending=False
-        )
-    )
-
-    # --------------------------------------------------------
-    # TOP 10 ONLY
-    # --------------------------------------------------------
-
-    priority_top10 = (
-        priority_df
-        .head(PRIORITY_LIMIT)
-        .copy()
-    )
-
-    # --------------------------------------------------------
-    # Remove those exact rows from normal list
-    # --------------------------------------------------------
-
-    if not priority_top10.empty:
-
-        # Use index so duplicate instrument
-        # keys don't accidentally remove other rows
-        priority_indexes = (
-            priority_top10.index
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=10
         )
 
-        remaining_df = data[
-            ~data.index.isin(
-                priority_indexes
-            )
-        ].copy()
+        if response.status_code == 200:
+            return True, None
+
+        return False, f"HTTP {response.status_code}: {response.text[:200]}"
+
+    except Exception as e:
+
+        return False, f"Exception: {e}"
+
+
+def check_and_alert_triggers(
+    df,
+    key_suffix,
+    telegram_enabled,
+    bot_token,
+    chat_id
+):
+
+    if not telegram_enabled:
+        return
+
+    if df.empty:
+        return
+
+    if "instrument_key" not in df.columns:
+        return
+
+    alerted = load_trigger_alert_state()
+
+    newly_triggered = []
+
+    for _, row in df.iterrows():
+
+        inst_key = row.get("instrument_key")
+
+        if not inst_key:
+            continue
+
+        alert_id = f"{key_suffix}:{inst_key}"
+
+        change_pct = row.get("change %", 0.0)
+
+        try:
+            change_pct = float(change_pct)
+        except:
+            continue
+
+        if change_pct >= 100 and alert_id not in alerted:
+
+            newly_triggered.append(row)
+
+            alerted.add(alert_id)
+
+    if not newly_triggered:
+        return
+
+    message_lines = [
+        f"🚀 <b>Trigger Crossed — {key_suffix}</b>"
+    ]
+
+    for row in newly_triggered:
+
+        message_lines.append(
+            f"\n<b>{row['Symbol']} {row['StrikePrice']:.0f} {row['OptionType']}</b>\n"
+            f"LTP: {row['ltp']:.2f}  ›  Trigger: {row['Trigger']:.2f}\n"
+            f"Change: {row['change %']:.2f}%"
+        )
+
+    message = "\n".join(message_lines)
+
+    success, error = send_telegram_alert(
+        bot_token,
+        chat_id,
+        message
+    )
+
+    if success:
+
+        save_trigger_alert_state(alerted)
+
+        st.sidebar.success(
+            f"Telegram alert sent for {len(newly_triggered)} "
+            f"trigger cross(es) on {key_suffix}."
+        )
 
     else:
 
-        remaining_df = data.copy()
-
-    # --------------------------------------------------------
-    # Normal scanner order for remaining rows
-    # --------------------------------------------------------
-
-    remaining_df = (
-        remaining_df
-        .sort_values(
-            by="change %",
-            ascending=False
+        st.sidebar.warning(
+            f"Telegram alert failed: {error}"
         )
-    )
-
-    # --------------------------------------------------------
-    # Add internal priority flag
-    # --------------------------------------------------------
-
-    priority_top10["_priority_display"] = True
-
-    remaining_df["_priority_display"] = False
-
-    # --------------------------------------------------------
-    # Combine
-    # --------------------------------------------------------
-
-    final_df = pd.concat(
-        [
-            priority_top10,
-            remaining_df
-        ],
-        axis=0
-    )
-
-    # --------------------------------------------------------
-    # Remove helper column
-    # --------------------------------------------------------
-
-    final_df = final_df.drop(
-        columns=["_priority"],
-        errors="ignore"
-    )
-
-    return final_df
 
 
 # ============================================================
@@ -1110,7 +1159,10 @@ def priority_sort(data):
 def display_option_chain(
     df,
     access_token,
-    key_suffix
+    key_suffix,
+    telegram_enabled=False,
+    telegram_bot_token="",
+    telegram_chat_id=""
 ):
 
     st.caption(
@@ -1373,6 +1425,22 @@ def display_option_chain(
             ]
 
     # ========================================================
+    # TELEGRAM TRIGGER ALERTS
+    #
+    # Runs on the full (CE+PE) dataframe, after change % is
+    # computed and blacklist filtering applied, before the
+    # CE/PE split below.
+    # ========================================================
+
+    check_and_alert_triggers(
+        df,
+        key_suffix,
+        telegram_enabled,
+        telegram_bot_token,
+        telegram_chat_id
+    )
+
+    # ========================================================
     # SPLIT CE / PE
     # ========================================================
 
@@ -1385,15 +1453,20 @@ def display_option_chain(
     ].copy()
 
     # ========================================================
-    # APPLY 90-110 PRIORITY LOGIC
+    # NORMAL SORT ORDER (change % descending)
+    #
+    # Priority re-ordering (90-110% pulled to top) removed -
+    # rows now stay in plain highest-change%-first order.
     # ========================================================
 
-    calls_df = priority_sort(
-        calls_df
+    calls_df = calls_df.sort_values(
+        by="change %",
+        ascending=False
     )
 
-    puts_df = priority_sort(
-        puts_df
+    puts_df = puts_df.sort_values(
+        by="change %",
+        ascending=False
     )
 
     # ========================================================
@@ -1423,7 +1496,7 @@ def display_option_chain(
             return ""
 
         # ----------------------------------------------------
-        # 90 - 110 = PRIORITY
+        # 90 - 110 = highlight band
         # ----------------------------------------------------
 
         if (
@@ -1500,23 +1573,6 @@ def display_option_chain(
             "Calls (CE)"
         )
 
-        # Priority count
-        ce_priority_count = (
-            calls_df[
-                calls_df[
-                    "_priority_display"
-                ] == True
-            ].shape[0]
-        )
-
-        if ce_priority_count > 0:
-
-            st.caption(
-                f"⭐ Priority: "
-                f"{ce_priority_count} "
-                f"options in 90–110% zone"
-            )
-
         st.dataframe(
 
             calls_df[
@@ -1559,23 +1615,6 @@ def display_option_chain(
         st.subheader(
             "Puts (PE)"
         )
-
-        # Priority count
-        pe_priority_count = (
-            puts_df[
-                puts_df[
-                    "_priority_display"
-                ] == True
-            ].shape[0]
-        )
-
-        if pe_priority_count > 0:
-
-            st.caption(
-                f"⭐ Priority: "
-                f"{pe_priority_count} "
-                f"options in 90–110% zone"
-            )
 
         st.dataframe(
 
@@ -1654,6 +1693,19 @@ if is_client_view:
 
     expiry_type = "Current Month"
 
+    # --------------------------------------------------------
+    # Telegram config in client view comes from secrets only,
+    # since the sidebar (with its manual controls) is hidden.
+    # --------------------------------------------------------
+
+    telegram_bot_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+
+    telegram_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+    telegram_enabled = bool(
+        telegram_bot_token and telegram_chat_id
+    )
+
 
 # ============================================================
 # ADMIN VIEW
@@ -1724,6 +1776,91 @@ else:
             else
             1
         )
+
+        st.markdown("---")
+
+        # ----------------------------------------------------
+        # TELEGRAM TRIGGER ALERTS
+        # ----------------------------------------------------
+
+        st.header(
+            "Telegram Alerts"
+        )
+
+        telegram_enabled = st.checkbox(
+            "Enable Trigger Alerts",
+            value=st.session_state.get(
+                "telegram_enabled", False
+            ),
+            key="telegram_enabled",
+            help=(
+                "Sends a Telegram message the moment an "
+                "option's LTP crosses its Trigger price "
+                "(change % >= 100)."
+            )
+        )
+
+        telegram_bot_token = st.text_input(
+            "Bot Token",
+            type="password",
+            value=st.session_state.get(
+                "telegram_bot_token", ""
+            ),
+            key="telegram_bot_token",
+            help="Create a bot via @BotFather on Telegram to get this token."
+        )
+
+        telegram_chat_id = st.text_input(
+            "Chat ID",
+            value=st.session_state.get(
+                "telegram_chat_id", ""
+            ),
+            key="telegram_chat_id",
+            help="Your personal or group chat ID. Message @userinfobot to find yours."
+        )
+
+        tg_col1, tg_col2 = st.columns(2)
+
+        test_telegram_clicked = tg_col1.button(
+            "Send Test",
+            use_container_width=True
+        )
+
+        reset_alert_state_clicked = tg_col2.button(
+            "Reset Alerts",
+            use_container_width=True
+        )
+
+        if reset_alert_state_clicked:
+
+            save_trigger_alert_state(set())
+
+            st.success(
+                "Alert state cleared — "
+                "already-triggered options "
+                "will alert again."
+            )
+
+        if test_telegram_clicked:
+
+            success, error = send_telegram_alert(
+                telegram_bot_token,
+                telegram_chat_id,
+                "✅ Test alert from Positional Option Scanner — "
+                "Telegram is wired up correctly."
+            )
+
+            if success:
+
+                st.success(
+                    "Test message sent — check Telegram."
+                )
+
+            else:
+
+                st.error(
+                    f"Test message failed: {error}"
+                )
 
         st.markdown("---")
 
@@ -2148,7 +2285,10 @@ if not nse_json_df.empty:
                 display_option_chain(
                     df_m,
                     access_token,
-                    "Monthly"
+                    "Monthly",
+                    telegram_enabled,
+                    telegram_bot_token,
+                    telegram_chat_id
                 )
 
             show_monthly()
@@ -2199,7 +2339,10 @@ if not nse_json_df.empty:
                 display_option_chain(
                     df_w,
                     access_token,
-                    "Weekly"
+                    "Weekly",
+                    telegram_enabled,
+                    telegram_bot_token,
+                    telegram_chat_id
                 )
 
             show_weekly()
@@ -2248,7 +2391,10 @@ if not nse_json_df.empty:
                 display_option_chain(
                     df_i,
                     access_token,
-                    "Intraday"
+                    "Intraday",
+                    telegram_enabled,
+                    telegram_bot_token,
+                    telegram_chat_id
                 )
 
             show_intraday()
