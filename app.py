@@ -99,6 +99,7 @@ BLACKLIST_FILE = os.path.join(DATA_DIR, 'blacklist.json')
 TOKEN_FILE = os.path.join(DATA_DIR, 'token.json')
 META_FILE = os.path.join(DATA_DIR, 'meta.json')
 LTP_CACHE_FILE = os.path.join(DATA_DIR, 'ltp_cache.json')
+TRIGGER_ALERT_FILE = os.path.join(DATA_DIR, 'trigger_alert_state.json')
 
 FILES = {
     'Monthly': os.path.join(DATA_DIR, 'monthly.csv'),
@@ -212,6 +213,115 @@ def save_blacklist(keys):
             json.dump(data, f)
     except:
         pass
+
+
+# ============================================================
+# TELEGRAM TRIGGER-ALERT STATE
+#
+# Persisted to disk (not just st.session_state) so alert
+# de-duplication survives Streamlit Cloud restarts / fragment
+# reruns. Resets automatically each new trading day.
+# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly/
+# Intraday tabs track their own alert history independently.
+# ============================================================
+
+def load_trigger_alert_state():
+    if os.path.exists(TRIGGER_ALERT_FILE):
+        try:
+            with open(TRIGGER_ALERT_FILE, 'r') as f:
+                data = json.load(f)
+                if data.get('date') == get_ist_now().strftime('%Y-%m-%d'):
+                    return set(data.get('keys', []))
+        except:
+            pass
+    return set()
+
+def save_trigger_alert_state(keys):
+    try:
+        data = {
+            'date': get_ist_now().strftime('%Y-%m-%d'),
+            'keys': list(keys)
+        }
+        with open(TRIGGER_ALERT_FILE, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
+
+
+def send_telegram_alert(bot_token, chat_id, message):
+    if not bot_token or not chat_id:
+        return False, "Missing bot token or chat ID"
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return True, None
+        return False, f"HTTP {response.status_code}: {response.text[:200]}"
+    except Exception as e:
+        return False, f"Exception: {e}"
+
+
+def check_and_alert_triggers(df, key_suffix, telegram_enabled, bot_token, chat_id):
+    """
+    Sends a Telegram alert the moment an option's change %
+    (LTP / Trigger x 100) crosses 100% - i.e. LTP has crossed
+    the Trigger price. Fires once per option per tab per day.
+    """
+    if not telegram_enabled:
+        return
+
+    if df.empty:
+        return
+
+    if 'instrument_key' not in df.columns:
+        return
+
+    alerted = load_trigger_alert_state()
+    newly_triggered = []
+
+    for _, row in df.iterrows():
+        inst_key = row.get('instrument_key')
+        if not inst_key:
+            continue
+
+        alert_id = f"{key_suffix}:{inst_key}"
+
+        try:
+            change_pct = float(row.get('change %', 0.0))
+        except:
+            continue
+
+        if change_pct >= 100 and alert_id not in alerted:
+            newly_triggered.append(row)
+            alerted.add(alert_id)
+
+    if not newly_triggered:
+        return
+
+    message_lines = [f"🚀 <b>Trigger Crossed — {key_suffix}</b>"]
+    for row in newly_triggered:
+        message_lines.append(
+            f"\n<b>{row['Symbol']} {row['StrikePrice']:.0f} {row['OptionType']}</b>\n"
+            f"LTP: {row['ltp']:.2f}  ›  Trigger: {row['Trigger']:.2f}\n"
+            f"Change: {row['change %']:.2f}%"
+        )
+
+    message = "\n".join(message_lines)
+    success, error = send_telegram_alert(bot_token, chat_id, message)
+
+    if success:
+        save_trigger_alert_state(alerted)
+        st.sidebar.success(f"Telegram alert sent for {len(newly_triggered)} trigger cross(es) on {key_suffix}.")
+    else:
+        st.sidebar.warning(f"Telegram alert failed: {error}")
+
 
 # Constant for NSE JSON
 NSE_JSON_PATH = 'NSE.json'
@@ -400,7 +510,7 @@ def fetch_ltp(instrument_keys, token):
     
     return ltp_map
 
-def display_option_chain(df, access_token, key_suffix):
+def display_option_chain(df, access_token, key_suffix, telegram_enabled=False, telegram_bot_token="", telegram_chat_id=""):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -504,6 +614,12 @@ def display_option_chain(df, access_token, key_suffix):
             # if diff > 0:
             #     st.caption(f"ℹ️ {diff} symbols hidden (Change % >= 100 before 09:30)")
 
+    # --- Telegram Trigger Alerts ---
+    # Runs on the full (CE+PE) dataframe, after change % is
+    # computed and blacklist filtering applied, before the
+    # CE/PE split below.
+    check_and_alert_triggers(df, key_suffix, telegram_enabled, telegram_bot_token, telegram_chat_id)
+
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
     puts_df = df[df['OptionType'] == 'PE'].copy()
@@ -574,6 +690,12 @@ if is_client_view:
     auto_refresh = True
     refresh_interval = 15
     target_expiry_idx = 0 # Default to current month for clients
+
+    # Telegram config in client view comes from secrets only,
+    # since the sidebar (with its manual controls) is hidden.
+    telegram_bot_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+    telegram_enabled = bool(telegram_bot_token and telegram_chat_id)
     
 else:
     # ADMIN VIEW (Show Sidebar)
@@ -597,6 +719,50 @@ else:
             help="Choose which expiry month to display data for."
         )
         target_expiry_idx = 0 if expiry_type == "Current Month" else 1
+
+        st.markdown("---")
+        st.header("Telegram Alerts")
+
+        telegram_enabled = st.checkbox(
+            "Enable Trigger Alerts",
+            value=st.session_state.get('telegram_enabled', False),
+            key='telegram_enabled',
+            help="Sends a Telegram message the moment an option's LTP crosses its Trigger price (change % >= 100)."
+        )
+
+        telegram_bot_token = st.text_input(
+            "Bot Token",
+            type="password",
+            value=st.session_state.get('telegram_bot_token', ''),
+            key='telegram_bot_token',
+            help="Create a bot via @BotFather on Telegram to get this token."
+        )
+
+        telegram_chat_id = st.text_input(
+            "Chat ID",
+            value=st.session_state.get('telegram_chat_id', ''),
+            key='telegram_chat_id',
+            help="Your personal or group chat ID. Message @userinfobot to find yours."
+        )
+
+        tg_col1, tg_col2 = st.columns(2)
+        test_telegram_clicked = tg_col1.button("Send Test", use_container_width=True)
+        reset_alert_state_clicked = tg_col2.button("Reset Alerts", use_container_width=True)
+
+        if reset_alert_state_clicked:
+            save_trigger_alert_state(set())
+            st.success("Alert state cleared — already-triggered options will alert again.")
+
+        if test_telegram_clicked:
+            success, error = send_telegram_alert(
+                telegram_bot_token,
+                telegram_chat_id,
+                "✅ Test alert from Positional Option Scanner — Telegram is wired up correctly."
+            )
+            if success:
+                st.success("Test message sent — check Telegram.")
+            else:
+                st.error(f"Test message failed: {error}")
     
         st.markdown("---")
         st.header("Data Management")
@@ -717,7 +883,7 @@ if not nse_json_df.empty:
                 df_m, target_exp, all_exps = process_bhavcopy(FILES['Monthly'], nse_json_df, target_expiry_index=target_expiry_idx)
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_m, access_token, "Monthly")
+                display_option_chain(df_m, access_token, "Monthly", telegram_enabled, telegram_bot_token, telegram_chat_id)
             show_monthly()
         else:
             st.warning("Monthly Bhavcopy file not found. Please upload in the sidebar.")
@@ -730,7 +896,7 @@ if not nse_json_df.empty:
                 df_w, target_exp, all_exps = process_bhavcopy(FILES['Weekly'], nse_json_df, target_expiry_index=target_expiry_idx)
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_w, access_token, "Weekly")
+                display_option_chain(df_w, access_token, "Weekly", telegram_enabled, telegram_bot_token, telegram_chat_id)
             show_weekly()
         else:
             st.warning("Weekly Bhavcopy file not found. Please upload in the sidebar.")
@@ -744,7 +910,7 @@ if not nse_json_df.empty:
                 df_i, target_exp, all_exps = process_bhavcopy(FILES['Intraday'], nse_json_df, target_expiry_index=0)
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_i, access_token, "Intraday")
+                display_option_chain(df_i, access_token, "Intraday", telegram_enabled, telegram_bot_token, telegram_chat_id)
             show_intraday()
         else:
             st.warning("Intraday Bhavcopy file not found. Please upload in the sidebar.")
