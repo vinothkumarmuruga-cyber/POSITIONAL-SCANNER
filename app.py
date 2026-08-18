@@ -95,7 +95,6 @@ DATA_DIR = 'data'
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-BLACKLIST_FILE = os.path.join(DATA_DIR, 'blacklist.json')
 TOKEN_FILE = os.path.join(DATA_DIR, 'token.json')
 META_FILE = os.path.join(DATA_DIR, 'meta.json')
 LTP_CACHE_FILE = os.path.join(DATA_DIR, 'ltp_cache.json')
@@ -103,8 +102,7 @@ TRIGGER_ALERT_FILE = os.path.join(DATA_DIR, 'trigger_alert_state.json')
 
 FILES = {
     'Monthly': os.path.join(DATA_DIR, 'monthly.csv'),
-    'Weekly': os.path.join(DATA_DIR, 'weekly.csv'),
-    'Intraday': os.path.join(DATA_DIR, 'intraday.csv')
+    'Weekly': os.path.join(DATA_DIR, 'weekly.csv')
 }
 
 def load_meta():
@@ -192,28 +190,6 @@ def save_token(token):
     except:
         pass
 
-def load_blacklist():
-    if os.path.exists(BLACKLIST_FILE):
-        try:
-            with open(BLACKLIST_FILE, 'r') as f:
-                data = json.load(f)
-                if data.get('date') == get_ist_now().strftime('%Y-%m-%d'):
-                    return set(data.get('keys', []))
-        except:
-            pass
-    return set()
-
-def save_blacklist(keys):
-    try:
-        data = {
-            'date': get_ist_now().strftime('%Y-%m-%d'),
-            'keys': list(keys)
-        }
-        with open(BLACKLIST_FILE, 'w') as f:
-            json.dump(data, f)
-    except:
-        pass
-
 
 # ============================================================
 # TELEGRAM TRIGGER-ALERT STATE
@@ -221,8 +197,8 @@ def save_blacklist(keys):
 # Persisted to disk (not just st.session_state) so alert
 # de-duplication survives Streamlit Cloud restarts / fragment
 # reruns. Resets automatically each new trading day.
-# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly/
-# Intraday tabs track their own alert history independently.
+# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly
+# tabs track their own alert history independently.
 # ============================================================
 
 def load_trigger_alert_state():
@@ -449,10 +425,6 @@ def process_bhavcopy(bhav_file, df_json, target_expiry_index=0):
             'LwPric': 'LowPrice',
             'LastPric': 'LastPrice'
         })
-        
-        # Calculate Camarilla R4
-        # Formula: Close + (High - Low) * 1.1 / 2
-        final_df['Camarilla_R4'] = final_df['Trigger'] + (final_df['HighPrice'] - final_df['LowPrice']) * 1.1 / 2
 
         # Multiply Trigger by 2 (User Rule)
         if 'Trigger' in final_df.columns:
@@ -571,10 +543,6 @@ def display_option_chain(df, access_token, key_suffix, telegram_enabled=False, t
         df['ltp'] = 0.0
         st.warning("Enter Access Token in sidebar to see live LTP.")
 
-    # If Intraday, replace Trigger with Camarilla_R4
-    if key_suffix == 'Intraday' and 'Camarilla_R4' in df.columns:
-        df['Trigger'] = df['Camarilla_R4']
-
     # Calculate Change %
     def calculate_numeric_change(row):
         try:
@@ -589,35 +557,9 @@ def display_option_chain(df, access_token, key_suffix, telegram_enabled=False, t
     df['change_val'] = df.apply(calculate_numeric_change, axis=1)
     df['change %'] = df['change_val']
 
-    # --- Intraday Blacklist Logic ---
-    if key_suffix == 'Intraday':
-        # Load existing blacklist
-        blacklist = load_blacklist()
-        
-        # Check time condition (before 09:30)
-        current_time = get_ist_now().time()
-        cutoff_time = datetime.strptime("09:30", "%H:%M").time()
-        
-        if current_time < cutoff_time:
-            # Identify new violators
-            violators = df[df['change %'] >= 100]['instrument_key'].tolist()
-            if violators:
-                blacklist.update(violators)
-                save_blacklist(blacklist)
-        
-        # Filter out blacklisted keys
-        if blacklist:
-            original_count = len(df)
-            df = df[~df['instrument_key'].isin(blacklist)]
-            filtered_count = len(df)
-            diff = original_count - filtered_count
-            # if diff > 0:
-            #     st.caption(f"ℹ️ {diff} symbols hidden (Change % >= 100 before 09:30)")
-
     # --- Telegram Trigger Alerts ---
     # Runs on the full (CE+PE) dataframe, after change % is
-    # computed and blacklist filtering applied, before the
-    # CE/PE split below.
+    # computed, before the CE/PE split below.
     check_and_alert_triggers(df, key_suffix, telegram_enabled, telegram_bot_token, telegram_chat_id)
 
     # Split Calls/Puts
@@ -711,7 +653,7 @@ else:
 
         st.markdown("---")
         st.header("Expiry Settings")
-        # Expiry Selection for Monthly/Weekly/Intraday
+        # Expiry Selection for Monthly/Weekly
         expiry_type = st.radio(
             "Select Expiry Month",
             options=["Current Month", "Next Month"],
@@ -838,26 +780,6 @@ else:
         elif os.path.exists(FILES['Weekly']):
             w_time = os.path.getmtime(FILES['Weekly'])
             st.caption(f"📅 Last Updated: {datetime.fromtimestamp(w_time).strftime('%Y-%m-%d %H:%M')}")
-        
-        # Intraday Uploader
-        st.subheader("Intraday")
-        up_i = st.file_uploader("Upload Intraday Bhavcopy", type=['zip'], key='i_up')
-        if up_i is not None:
-            csv_content, csv_name = extract_csv_from_zip(up_i)
-            if csv_content:
-                with open(FILES['Intraday'], "wb") as f:
-                    f.write(csv_content)
-                # Extract and save date
-                date_str = extract_date_from_filename(csv_name)
-                if date_str:
-                    save_meta('Intraday', date_str)
-                st.success(f"Intraday file updated from {csv_name}!")
-        
-        if 'Intraday' in meta and os.path.exists(FILES['Intraday']):
-            st.caption(f"📅 Data Date: {meta['Intraday']}")
-        elif os.path.exists(FILES['Intraday']):
-            i_time = os.path.getmtime(FILES['Intraday'])
-            st.caption(f"📅 Last Updated: {datetime.fromtimestamp(i_time).strftime('%Y-%m-%d %H:%M')}")
             
         st.markdown("---")
         st.header("Auto Refresh")
@@ -871,7 +793,7 @@ st.title("Positional Stock Option Scanner")
 nse_json_df = load_nse_json()
 
 if not nse_json_df.empty:
-    tab1, tab2, tab3 = st.tabs(["Monthly", "Weekly", "Intraday"])
+    tab1, tab2 = st.tabs(["Monthly", "Weekly"])
     
     run_every = refresh_interval if auto_refresh else None
 
@@ -900,20 +822,6 @@ if not nse_json_df.empty:
             show_weekly()
         else:
             st.warning("Weekly Bhavcopy file not found. Please upload in the sidebar.")
-
-    with tab3:
-        st.header("Intraday Options")
-        if os.path.exists(FILES['Intraday']):
-            @st.fragment(run_every=run_every)
-            def show_intraday():
-                # For Intraday, we usually always look at the nearest (0)
-                df_i, target_exp, all_exps = process_bhavcopy(FILES['Intraday'], nse_json_df, target_expiry_index=0)
-                if target_exp:
-                    st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_i, access_token, "Intraday", telegram_enabled, telegram_bot_token, telegram_chat_id)
-            show_intraday()
-        else:
-            st.warning("Intraday Bhavcopy file not found. Please upload in the sidebar.")
 
 else:
     st.error("Critical Error: NSE.json could not be loaded.")
