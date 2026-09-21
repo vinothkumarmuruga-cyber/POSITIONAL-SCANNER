@@ -6,6 +6,7 @@ import os
 import time
 import gzip
 import shutil
+import html
 from datetime import datetime, timedelta, timezone
 import concurrent.futures
 import zipfile
@@ -278,11 +279,21 @@ def send_telegram_alert(bot_token, chat_id, message):
         return False, f"Exception: {e}"
 
 
+# Telegram's hard limit is 4096 characters per message. Stay well under it.
+TG_MAX_CHARS = 3500
+
 def check_and_alert_triggers(df, key_suffix, tg_cfg):
     """
     Sends a Telegram alert the moment an option's change %
     (LTP / Trigger x 100) crosses 100% - i.e. LTP has crossed
     the Trigger price. Fires once per option per tab per day.
+
+    All newly-triggered options found in one refresh are split across as
+    many messages as needed to stay under Telegram's 4096-char limit
+    (previously one giant message -> "message is too long" and the alert
+    was retried and failed on every refresh). An option is only marked
+    as alerted once the message carrying it was actually delivered, so a
+    failed chunk is retried on the next refresh.
 
     tg_cfg is the config dict for THIS tab only:
         {'enabled': bool, 'bot_token': str, 'chat_id': str}
@@ -297,7 +308,7 @@ def check_and_alert_triggers(df, key_suffix, tg_cfg):
         return
 
     alerted = load_trigger_alert_state()
-    newly_triggered = []
+    pending = []  # list of (alert_id, text_block)
 
     for _, row in df.iterrows():
         inst_key = row.get('instrument_key')
@@ -305,35 +316,57 @@ def check_and_alert_triggers(df, key_suffix, tg_cfg):
             continue
 
         alert_id = f"{key_suffix}:{inst_key}"
+        if alert_id in alerted:
+            continue
 
         try:
             change_pct = float(row.get('change %', 0.0))
         except:
             continue
 
-        if change_pct >= 100 and alert_id not in alerted:
-            newly_triggered.append(row)
-            alerted.add(alert_id)
+        if change_pct >= 100:
+            block = (
+                f"\n<b>{html.escape(str(row['Symbol']))} {row['StrikePrice']:.0f} {row['OptionType']}</b>\n"
+                f"LTP: {row['ltp']:.2f}  ›  Trigger: {row['Trigger']:.2f}\n"
+                f"Change: {row['change %']:.2f}%"
+            )
+            pending.append((alert_id, block))
 
-    if not newly_triggered:
+    if not pending:
         return
 
-    message_lines = [f"🚀 <b>Trigger Crossed — {key_suffix}</b>"]
-    for row in newly_triggered:
-        message_lines.append(
-            f"\n<b>{row['Symbol']} {row['StrikePrice']:.0f} {row['OptionType']}</b>\n"
-            f"LTP: {row['ltp']:.2f}  ›  Trigger: {row['Trigger']:.2f}\n"
-            f"Change: {row['change %']:.2f}%"
-        )
+    # Pack blocks into chunks under TG_MAX_CHARS
+    chunks = []  # each: list of (alert_id, block)
+    current, current_len = [], 0
+    for alert_id, block in pending:
+        if current and current_len + len(block) > TG_MAX_CHARS:
+            chunks.append(current)
+            current, current_len = [], 0
+        current.append((alert_id, block))
+        current_len += len(block)
+    if current:
+        chunks.append(current)
 
-    message = "\n".join(message_lines)
-    success, error = send_telegram_alert(tg_cfg.get('bot_token', ''), tg_cfg.get('chat_id', ''), message)
+    sent_count = 0
+    last_error = None
+    for i, chunk in enumerate(chunks, start=1):
+        part = f" ({i}/{len(chunks)})" if len(chunks) > 1 else ""
+        message = f"🚀 <b>Trigger Crossed — {key_suffix}</b>{part}" + "".join(b for _, b in chunk)
+        success, error = send_telegram_alert(tg_cfg.get('bot_token', ''), tg_cfg.get('chat_id', ''), message)
+        if success:
+            for alert_id, _ in chunk:
+                alerted.add(alert_id)
+            save_trigger_alert_state(alerted)
+            sent_count += len(chunk)
+        else:
+            last_error = error
+        if i < len(chunks):
+            time.sleep(1.1)  # Telegram allows ~1 msg/sec per chat
 
-    if success:
-        save_trigger_alert_state(alerted)
-        st.sidebar.success(f"Telegram alert sent for {len(newly_triggered)} trigger cross(es) on {key_suffix}.")
-    else:
-        st.sidebar.warning(f"Telegram alert failed ({key_suffix}): {error}")
+    if sent_count:
+        st.sidebar.success(f"Telegram alert sent for {sent_count} trigger cross(es) on {key_suffix}.")
+    if last_error:
+        st.sidebar.warning(f"Telegram alert failed ({key_suffix}): {last_error}")
 
 
 # Constant for NSE JSON
