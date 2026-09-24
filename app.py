@@ -102,9 +102,13 @@ LTP_CACHE_FILE = os.path.join(DATA_DIR, 'ltp_cache.json')
 TRIGGER_ALERT_FILE = os.path.join(DATA_DIR, 'trigger_alert_state.json')
 TELEGRAM_CFG_FILE = os.path.join(DATA_DIR, 'telegram_cfg.json')
 
+# NIFTY / BANKNIFTY symbols shown on the Index tab
+INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY']
+
 FILES = {
     'Monthly': os.path.join(DATA_DIR, 'monthly.csv'),
-    'Weekly': os.path.join(DATA_DIR, 'weekly.csv')
+    'Weekly': os.path.join(DATA_DIR, 'weekly.csv'),
+    'Index': os.path.join(DATA_DIR, 'index.csv')
 }
 
 def load_meta():
@@ -194,14 +198,14 @@ def save_token(token):
 
 
 # ============================================================
-# TELEGRAM CONFIG (separate for Monthly and Weekly)
+# TELEGRAM CONFIG (separate for Monthly, Weekly and Index)
 #
 # Each tab has its own enable flag, bot token and chat ID, so
-# Weekly alerts can go to a different bot / chat than Monthly.
+# alerts can go to a different bot / chat per tab.
 # Saved to disk so values survive Streamlit Cloud restarts.
 # ============================================================
 
-TG_TABS = ['Monthly', 'Weekly']
+TG_TABS = ['Monthly', 'Weekly', 'Index']
 
 def load_telegram_cfg():
     if os.path.exists(TELEGRAM_CFG_FILE):
@@ -226,7 +230,7 @@ def save_telegram_cfg(cfg):
 # Persisted to disk (not just st.session_state) so alert
 # de-duplication survives Streamlit Cloud restarts / fragment
 # reruns. Resets automatically each new trading day.
-# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly
+# Each entry is "<tab>:<instrument_key>" so Monthly/Weekly/Index
 # tabs track their own alert history independently.
 # ============================================================
 
@@ -253,7 +257,7 @@ def save_trigger_alert_state(keys):
         pass
 
 def reset_trigger_alert_state_for_tab(tab_name):
-    """Clears alert history for ONE tab only (Monthly or Weekly)."""
+    """Clears alert history for ONE tab only (Monthly, Weekly or Index)."""
     keys = load_trigger_alert_state()
     keys = {k for k in keys if not k.startswith(f"{tab_name}:")}
     save_trigger_alert_state(keys)
@@ -506,6 +510,107 @@ def process_bhavcopy(bhav_file, df_json, target_expiry_index=0):
         st.error(f"Error processing file: {e}")
         return pd.DataFrame(), None, []
 
+
+def process_index_bhavcopy(bhav_file, df_json, target_expiry_index=0):
+    """
+    Index tab (NIFTY / BANKNIFTY only).
+
+    Unlike process_bhavcopy (stocks), this does NOT compute an ATM strike
+    against a matching future - it takes EVERY strike present in the
+    Bhavcopy for NIFTY and BANKNIFTY as-is, for the selected expiry.
+    Trigger / LTP / change % logic downstream is identical to the
+    Monthly/Weekly tabs.
+    """
+    try:
+        df_bhav = pd.read_csv(bhav_file)
+
+        required_cols = ['TckrSymb', 'XpryDt', 'ClsPric', 'StrkPric', 'OptnTp', 'HghPric', 'LwPric', 'LastPric']
+        if not all(col in df_bhav.columns for col in required_cols):
+            st.error(f"Uploaded file missing required columns: {required_cols}")
+            return pd.DataFrame(), None, []
+
+        # Only NIFTY / BANKNIFTY options
+        options = df_bhav[
+            (df_bhav['OptnTp'].isin(['CE', 'PE'])) &
+            (df_bhav['TckrSymb'].isin(INDEX_SYMBOLS))
+        ].copy()
+
+        if options.empty:
+            st.warning("No NIFTY / BANKNIFTY options found in uploaded file.")
+            return pd.DataFrame(), None, []
+
+        options['XpryDt'] = pd.to_datetime(options['XpryDt'])
+
+        ist_now = get_ist_now()
+        today = ist_now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        options = options[options['XpryDt'] >= today]
+
+        if options.empty:
+            st.warning("No future expiries found for NIFTY / BANKNIFTY in the uploaded file.")
+            return pd.DataFrame(), None, []
+
+        # Pick the target expiry independently per symbol (NIFTY/BANKNIFTY
+        # weekly expiry days can differ), keep EVERY strike for that expiry.
+        selected_chunks = []
+        target_expiries = []
+        for sym, grp in options.groupby('TckrSymb'):
+            exps = sorted(grp['XpryDt'].unique())
+            if not exps:
+                continue
+            idx = target_expiry_index if target_expiry_index < len(exps) else len(exps) - 1
+            target_exp = exps[idx]
+            target_expiries.append(target_exp)
+            selected_chunks.append(grp[grp['XpryDt'] == target_exp])
+
+        if not selected_chunks:
+            return pd.DataFrame(), None, []
+
+        selected = pd.concat(selected_chunks, ignore_index=True)
+
+        index_rows = selected[['TckrSymb', 'XpryDt', 'StrkPric', 'OptnTp', 'ClsPric', 'HghPric', 'LwPric', 'LastPric']].copy()
+        index_rows['XpryDt'] = index_rows['XpryDt'].dt.normalize()
+
+        # Merge with Upstox JSON to get instrument_key
+        result = pd.merge(
+            index_rows,
+            df_json,
+            left_on=['TckrSymb', 'StrkPric', 'OptnTp', 'XpryDt'],
+            right_on=['underlying_symbol', 'strike_price', 'instrument_type', 'expiry_dt'],
+            how='inner'
+        )
+
+        if result.empty and not index_rows.empty:
+            st.error("Data mismatch: Found NIFTY/BANKNIFTY options in Bhavcopy but couldn't find them in NSE.json. Please update NSE.json via the sidebar.")
+
+        final_df = result[[
+            'TckrSymb', 'XpryDt', 'StrkPric', 'OptnTp',
+            'ClsPric', 'instrument_key',
+            'HghPric', 'LwPric', 'LastPric'
+        ]]
+
+        final_df = final_df.rename(columns={
+            'TckrSymb': 'Symbol',
+            'XpryDt': 'ExpiryDate',
+            'StrkPric': 'StrikePrice',
+            'OptnTp': 'OptionType',
+            'ClsPric': 'Trigger',
+            'HghPric': 'HighPrice',
+            'LwPric': 'LowPrice',
+            'LastPric': 'LastPrice'
+        })
+
+        # Multiply Trigger by 2 (User Rule - same as Monthly/Weekly)
+        if 'Trigger' in final_df.columns:
+            final_df['Trigger'] = final_df['Trigger'] * 2
+
+        display_expiry = min(target_expiries) if target_expiries else None
+        return final_df, display_expiry, target_expiries
+
+    except Exception as e:
+        st.error(f"Error processing Index file: {e}")
+        return pd.DataFrame(), None, []
+
+
 def fetch_ltp(instrument_keys, token):
     if not token:
         return {}
@@ -688,10 +793,11 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None):
 # To see the sidebar (Admin View), remove or comment out UPSTOX_ACCESS_TOKEN in .streamlit/secrets.toml
 is_client_view = "UPSTOX_ACCESS_TOKEN" in st.secrets and st.secrets["UPSTOX_ACCESS_TOKEN"].strip() != ""
 
-# Per-tab Telegram config: {'Monthly': {...}, 'Weekly': {...}}
+# Per-tab Telegram config: {'Monthly': {...}, 'Weekly': {...}, 'Index': {...}}
 telegram_cfgs = {
     'Monthly': {'enabled': False, 'bot_token': '', 'chat_id': ''},
     'Weekly': {'enabled': False, 'bot_token': '', 'chat_id': ''},
+    'Index': {'enabled': False, 'bot_token': '', 'chat_id': ''},
 }
 
 if is_client_view:
@@ -714,13 +820,18 @@ if is_client_view:
     #   Monthly: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
     #   Weekly : TELEGRAM_WEEKLY_BOT_TOKEN / TELEGRAM_WEEKLY_CHAT_ID
     #            (falls back to the Monthly values if not set)
+    #   Index  : TELEGRAM_INDEX_BOT_TOKEN / TELEGRAM_INDEX_CHAT_ID
+    #            (falls back to the Monthly values if not set)
     m_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
     m_chat = st.secrets.get("TELEGRAM_CHAT_ID", "")
     w_token = st.secrets.get("TELEGRAM_WEEKLY_BOT_TOKEN", "") or m_token
     w_chat = st.secrets.get("TELEGRAM_WEEKLY_CHAT_ID", "") or m_chat
+    i_token = st.secrets.get("TELEGRAM_INDEX_BOT_TOKEN", "") or m_token
+    i_chat = st.secrets.get("TELEGRAM_INDEX_CHAT_ID", "") or m_chat
 
     telegram_cfgs['Monthly'] = {'enabled': bool(m_token and m_chat), 'bot_token': m_token, 'chat_id': m_chat}
     telegram_cfgs['Weekly'] = {'enabled': bool(w_token and w_chat), 'bot_token': w_token, 'chat_id': w_chat}
+    telegram_cfgs['Index'] = {'enabled': bool(i_token and i_chat), 'bot_token': i_token, 'chat_id': i_chat}
     
 else:
     # ADMIN VIEW (Show Sidebar)
@@ -736,7 +847,7 @@ else:
 
         st.markdown("---")
         st.header("Expiry Settings")
-        # Expiry Selection for Monthly/Weekly
+        # Expiry Selection for Monthly/Weekly/Index
         expiry_type = st.radio(
             "Select Expiry Month",
             options=["Current Month", "Next Month"],
@@ -877,6 +988,26 @@ else:
         elif os.path.exists(FILES['Weekly']):
             w_time = os.path.getmtime(FILES['Weekly'])
             st.caption(f"📅 Last Updated: {datetime.fromtimestamp(w_time).strftime('%Y-%m-%d %H:%M')}")
+
+        # Index Uploader (NIFTY / BANKNIFTY only)
+        st.subheader("Index (NIFTY / BANKNIFTY)")
+        up_i = st.file_uploader("Upload Index Bhavcopy", type=['zip'], key='i_up')
+        if up_i is not None:
+            csv_content, csv_name = extract_csv_from_zip(up_i)
+            if csv_content:
+                with open(FILES['Index'], "wb") as f:
+                    f.write(csv_content)
+                # Extract and save date
+                date_str = extract_date_from_filename(csv_name)
+                if date_str:
+                    save_meta('Index', date_str)
+                st.success(f"Index file updated from {csv_name}!")
+
+        if 'Index' in meta and os.path.exists(FILES['Index']):
+            st.caption(f"📅 Data Date: {meta['Index']}")
+        elif os.path.exists(FILES['Index']):
+            i_time = os.path.getmtime(FILES['Index'])
+            st.caption(f"📅 Last Updated: {datetime.fromtimestamp(i_time).strftime('%Y-%m-%d %H:%M')}")
             
         st.markdown("---")
         st.header("Auto Refresh")
@@ -890,7 +1021,7 @@ st.title("Positional Stock Option Scanner")
 nse_json_df = load_nse_json()
 
 if not nse_json_df.empty:
-    tab1, tab2 = st.tabs(["Monthly", "Weekly"])
+    tab1, tab2, tab3 = st.tabs(["Monthly", "Weekly", "Index"])
     
     run_every = refresh_interval if auto_refresh else None
 
@@ -919,6 +1050,19 @@ if not nse_json_df.empty:
             show_weekly()
         else:
             st.warning("Weekly Bhavcopy file not found. Please upload in the sidebar.")
+
+    with tab3:
+        st.header(f"Index Options — NIFTY & BANKNIFTY ({expiry_type if not is_client_view else 'Current Month'})")
+        if os.path.exists(FILES['Index']):
+            @st.fragment(run_every=run_every)
+            def show_index():
+                df_i, target_exp, all_exps = process_index_bhavcopy(FILES['Index'], nse_json_df, target_expiry_index=target_expiry_idx)
+                if target_exp:
+                    st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}** (nearest of NIFTY/BANKNIFTY)")
+                display_option_chain(df_i, access_token, "Index", telegram_cfgs['Index'])
+            show_index()
+        else:
+            st.warning("Index Bhavcopy file not found. Please upload in the sidebar.")
 
 else:
     st.error("Critical Error: NSE.json could not be loaded.")
