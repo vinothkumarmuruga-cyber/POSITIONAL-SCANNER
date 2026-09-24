@@ -596,7 +596,72 @@ def fetch_ltp(instrument_keys, token):
     
     return ltp_map
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None):
+def render_breadth_summary(df, groups):
+    """
+    Renders a small breadth/trend table above the CE/PE columns.
+
+    For each group (e.g. 'NIFTY 50', 'BANK NIFTY'), counts how many of
+    that group's stocks currently have a CE (call) with change % >= 100
+    versus a PE (put) with change % >= 100, and the total distinct
+    stocks from that group present in the uploaded file.
+
+    Interpretation: more CE triggers than PE triggers across the basket
+    suggests broad-based upside strength (more calls doubling up than
+    puts) -> "Bullish"; more PE triggers suggests downside strength ->
+    "Bearish"; equal counts -> "Neutral".
+    """
+    if df.empty or 'change %' not in df.columns:
+        return
+
+    rows = []
+    for label, symbols in groups.items():
+        sub = df[df['Symbol'].isin(symbols)]
+        if sub.empty:
+            continue
+        ce_above = sub[(sub['OptionType'] == 'CE') & (sub['change %'] >= 100)].shape[0]
+        pe_above = sub[(sub['OptionType'] == 'PE') & (sub['change %'] >= 100)].shape[0]
+        total_stocks = sub['Symbol'].nunique()
+
+        if ce_above > pe_above:
+            trend = "🔼 Up"
+        elif pe_above > ce_above:
+            trend = "🔽 Down"
+        else:
+            trend = "➖ Neutral"
+
+        rows.append({
+            'Symbol': label,
+            'No of CE Abv 100': ce_above,
+            'No of PE Abv 100': pe_above,
+            'Total Stocks': total_stocks,
+            'Trend': trend
+        })
+
+    if not rows:
+        return
+
+    summary_df = pd.DataFrame(rows)
+
+    def color_trend(val):
+        if isinstance(val, str):
+            if 'Up' in val:
+                return 'background-color: darkgreen; color: white'
+            elif 'Down' in val:
+                return 'background-color: darkred; color: white'
+        return ''
+
+    st.subheader("📊 Trend Summary")
+    st.dataframe(
+        summary_df.style
+        .map(color_trend, subset=['Trend'])
+        .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
+        hide_index=True,
+        use_container_width=True
+    )
+    st.markdown("---")
+
+
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -675,6 +740,10 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None):
     # Runs on the full (CE+PE) dataframe, after change % is
     # computed, before the CE/PE split below.
     check_and_alert_triggers(df, key_suffix, tg_cfg)
+
+    # --- Trend Summary (only when breadth_groups passed - i.e. Index tab) ---
+    if breadth_groups:
+        render_breadth_summary(df, breadth_groups)
 
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
@@ -1002,7 +1071,10 @@ if not nse_json_df.empty:
                 )
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_i, access_token, "Index", telegram_cfgs['Index'])
+                display_option_chain(
+                    df_i, access_token, "Index", telegram_cfgs['Index'],
+                    breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS}
+                )
             show_index()
         else:
             st.warning("Index Bhavcopy file not found. Please upload in the sidebar.")
