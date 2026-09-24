@@ -132,6 +132,7 @@ BANKNIFTY_SYMBOLS = [
 
 # Combined, de-duplicated universe for the Index tab (order preserved)
 INDEX_SYMBOLS = list(dict.fromkeys(NIFTY50_SYMBOLS + BANKNIFTY_SYMBOLS))
+BREADTH_GROUPS = {'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS}
 
 FILES = {
     'Monthly': os.path.join(DATA_DIR, 'monthly.csv'),
@@ -712,8 +713,7 @@ def get_index_futures_pc(bhav_file, target_expiry_index=0):
         return pc_map
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0):
-    st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0, section_title=None, expiry=None):
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
         return
@@ -771,7 +771,6 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
         df['ltp'] = df['instrument_key'].map(ltp_data).fillna(0.0)
     else:
         df['ltp'] = 0.0
-        st.warning("Enter Access Token in sidebar to see live LTP.")
 
     # Calculate Change %
     def calculate_numeric_change(row):
@@ -792,9 +791,17 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     # computed, before the CE/PE split below.
     check_and_alert_triggers(df, key_suffix, tg_cfg)
 
-    # --- Trend Summary (only when breadth_groups passed - i.e. Index tab) ---
+    # --- Trend Summary ---
     if breadth_groups:
         render_breadth_summary(df, breadth_groups)
+
+    if section_title:
+        st.header(section_title)
+    if expiry is not None:
+        st.info(f"📅 Displaying Expiry: **{expiry.strftime('%d-%b-%Y')}**")
+    st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
+    if not access_token:
+        st.warning("Enter Access Token in sidebar to see live LTP.")
 
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
@@ -1128,33 +1135,36 @@ if not nse_json_df.empty:
     run_every = refresh_interval if auto_refresh else None
 
     with tab1:
-        st.header(f"Monthly Options ({expiry_type if not is_client_view else 'Current Month'})")
         if os.path.exists(FILES['Monthly']):
             @st.fragment(run_every=run_every)
             def show_monthly():
                 df_m, target_exp, all_exps = process_bhavcopy(FILES['Monthly'], nse_json_df, target_expiry_index=target_expiry_idx)
-                if target_exp:
-                    st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_m, access_token, "Monthly", telegram_cfgs['Monthly'])
+                display_option_chain(
+                    df_m, access_token, "Monthly", telegram_cfgs['Monthly'],
+                    breadth_groups=BREADTH_GROUPS,
+                    section_title=f"Monthly Options ({expiry_type if not is_client_view else 'Current Month'})",
+                    expiry=target_exp
+                )
             show_monthly()
         else:
             st.warning("Monthly Bhavcopy file not found. Please upload in the sidebar.")
 
     with tab2:
-        st.header(f"Weekly Options ({expiry_type if not is_client_view else 'Current Month'})")
         if os.path.exists(FILES['Weekly']):
             @st.fragment(run_every=run_every)
             def show_weekly():
                 df_w, target_exp, all_exps = process_bhavcopy(FILES['Weekly'], nse_json_df, target_expiry_index=target_expiry_idx)
-                if target_exp:
-                    st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(df_w, access_token, "Weekly", telegram_cfgs['Weekly'])
+                display_option_chain(
+                    df_w, access_token, "Weekly", telegram_cfgs['Weekly'],
+                    breadth_groups=BREADTH_GROUPS,
+                    section_title=f"Weekly Options ({expiry_type if not is_client_view else 'Current Month'})",
+                    expiry=target_exp
+                )
             show_weekly()
         else:
             st.warning("Weekly Bhavcopy file not found. Please upload in the sidebar.")
 
     with tab3:
-        st.header(f"Index Options — Nifty 50 & Bank Nifty Stocks ({expiry_type if not is_client_view else 'Current Month'})")
         if os.path.exists(FILES['Index']):
             @st.fragment(run_every=run_every)
             def show_index():
@@ -1163,15 +1173,15 @@ if not nse_json_df.empty:
                     target_expiry_index=target_expiry_idx,
                     symbol_filter=INDEX_SYMBOLS
                 )
-                if target_exp:
-                    st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
                 display_option_chain(
                     df_i, access_token, "Index", telegram_cfgs['Index'],
-                    breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS},
+                    breadth_groups=BREADTH_GROUPS,
                     highlight_symbols=BANKNIFTY_SYMBOLS,
                     show_index_tracker=True,
                     index_bhav_file=FILES['Index'],
-                    target_expiry_idx=target_expiry_idx
+                    target_expiry_idx=target_expiry_idx,
+                    section_title=f"Index Options — Nifty 50 & Bank Nifty Stocks ({expiry_type if not is_client_view else 'Current Month'})",
+                    expiry=target_exp
                 )
             show_index()
         else:
