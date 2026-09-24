@@ -650,10 +650,18 @@ def render_breadth_summary(df, groups):
                 return 'background-color: darkred; color: white'
         return ''
 
+    def color_symbol(val):
+        if val == 'BANK NIFTY':
+            return 'background-color: #8e44ad; color: white'  # purple
+        elif val == 'NIFTY 50':
+            return 'background-color: #2980b9; color: white'  # blue
+        return ''
+
     st.subheader("📊 Trend Summary")
     st.dataframe(
         summary_df.style
         .map(color_trend, subset=['Trend'])
+        .map(color_symbol, subset=['Symbol'])
         .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
         hide_index=True,
         use_container_width=True
