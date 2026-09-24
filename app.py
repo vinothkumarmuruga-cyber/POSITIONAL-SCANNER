@@ -712,76 +712,6 @@ def get_index_futures_pc(bhav_file, target_expiry_index=0):
         return pc_map
 
 
-def render_index_spot_tracker(bhav_file, access_token, target_expiry_index=0):
-    """
-    Small table below the Trend Summary: Strike/Trigger is auto-pulled as
-    the Previous Close of the NIFTY / BANKNIFTY INDEX FUTURES from the
-    uploaded Index Bhavcopy (no manual entry needed). Fetches the live
-    index LTP via Upstox and shows the same Trigger / ltp / change %
-    pattern as the rest of the app (change % = ltp / Trigger * 100).
-    """
-    st.subheader("🎯 Index Spot Tracker")
-
-    pc_map = get_index_futures_pc(bhav_file, target_expiry_index)
-    nifty_strike = pc_map.get('NIFTY', 0.0)
-    bn_strike = pc_map.get('BANK NIFTY', 0.0)
-
-    if nifty_strike == 0.0 and bn_strike == 0.0:
-        st.info("NIFTY / BANKNIFTY index futures not found in the uploaded Index Bhavcopy for the selected expiry.")
-
-    NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
-    BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
-
-    ltp_map = {}
-    if access_token:
-        ltp_map = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
-    else:
-        st.warning("Enter Access Token in sidebar to see live LTP.")
-
-    nifty_ltp = ltp_map.get(NIFTY_INDEX_KEY, 0.0) or 0.0
-    bn_ltp = ltp_map.get(BANKNIFTY_INDEX_KEY, 0.0) or 0.0
-
-    def calc_change(strike, ltp):
-        try:
-            if strike > 0 and ltp > 0:
-                return (ltp / strike) * 100
-            return 0.0
-        except:
-            return 0.0
-
-    rows = [
-        {'Symbol': 'NIFTY', 'Strike': nifty_strike, 'Trigger': nifty_strike, 'ltp': nifty_ltp, 'change %': calc_change(nifty_strike, nifty_ltp)},
-        {'Symbol': 'BANK NIFTY', 'Strike': bn_strike, 'Trigger': bn_strike, 'ltp': bn_ltp, 'change %': calc_change(bn_strike, bn_ltp)},
-    ]
-    tracker_df = pd.DataFrame(rows)
-
-    def color_change(val):
-        if isinstance(val, (int, float)):
-            if val >= 100:
-                return 'background-color: darkgreen; color: white'
-            elif val >= 90:
-                return 'background-color: lightgreen; color: black'
-        return ''
-
-    def color_symbol(val):
-        if val == 'BANK NIFTY':
-            return 'background-color: #8e44ad; color: white'
-        elif val == 'NIFTY':
-            return 'background-color: #2980b9; color: white'
-        return ''
-
-    st.dataframe(
-        tracker_df.style
-        .map(color_change, subset=['change %'])
-        .map(color_symbol, subset=['Symbol'])
-        .format({'Strike': '{:.2f}', 'Trigger': '{:.2f}', 'ltp': '{:.2f}', 'change %': '{:.2f}%'})
-        .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
-        hide_index=True,
-        use_container_width=True
-    )
-    st.markdown("---")
-
-
 def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
@@ -866,10 +796,6 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     if breadth_groups:
         render_breadth_summary(df, breadth_groups)
 
-    # --- Index Spot Tracker (NIFTY / BANK NIFTY level, below Trend Summary) ---
-    if show_index_tracker:
-        render_index_spot_tracker(index_bhav_file, access_token, target_expiry_idx)
-
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
     puts_df = df[df['OptionType'] == 'PE'].copy()
@@ -877,6 +803,38 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     # Sort
     calls_df = calls_df.sort_values(by='change %', ascending=False)
     puts_df = puts_df.sort_values(by='change %', ascending=False)
+
+    # --- Pin NIFTY / BANK NIFTY (futures PC as Trigger, live LTP) at the
+    # top of BOTH tables, every refresh - so the index level is always
+    # visible regardless of how the rest of the table is sorted.
+    if show_index_tracker and index_bhav_file:
+        pc_map = get_index_futures_pc(index_bhav_file, target_expiry_idx)
+        NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
+        BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
+
+        idx_ltp_map = {}
+        if access_token:
+            idx_ltp_map = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
+
+        nifty_pc = pc_map.get('NIFTY', 0.0)
+        bn_pc = pc_map.get('BANK NIFTY', 0.0)
+        nifty_ltp = idx_ltp_map.get(NIFTY_INDEX_KEY, 0.0) or 0.0
+        bn_ltp = idx_ltp_map.get(BANKNIFTY_INDEX_KEY, 0.0) or 0.0
+
+        def _idx_change(strike, ltp):
+            try:
+                if strike > 0 and ltp > 0:
+                    return (ltp / strike) * 100
+                return 0.0
+            except:
+                return 0.0
+
+        index_pin_rows = pd.DataFrame([
+            {'Symbol': 'NIFTY', 'StrikePrice': nifty_pc, 'Trigger': nifty_pc, 'ltp': nifty_ltp, 'change %': _idx_change(nifty_pc, nifty_ltp)},
+            {'Symbol': 'BANK NIFTY', 'StrikePrice': bn_pc, 'Trigger': bn_pc, 'ltp': bn_ltp, 'change %': _idx_change(bn_pc, bn_ltp)},
+        ])
+        calls_df = pd.concat([index_pin_rows, calls_df], ignore_index=True)
+        puts_df = pd.concat([index_pin_rows, puts_df], ignore_index=True)
 
     display_cols = ['Symbol', 'StrikePrice', 'Trigger', 'ltp', 'change %']
     
@@ -890,7 +848,11 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
         return ''
 
     def color_bn_symbol(val):
-        if highlight_symbols and val in highlight_symbols:
+        if val == 'BANK NIFTY':
+            return 'background-color: #8e44ad; color: white'  # purple - Bank Nifty index
+        elif val == 'NIFTY':
+            return 'background-color: #2980b9; color: white'  # blue - Nifty index
+        elif highlight_symbols and val in highlight_symbols:
             return 'background-color: #8e44ad; color: white'  # purple - Bank Nifty stock
         return ''
 
