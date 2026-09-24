@@ -670,50 +670,90 @@ def render_breadth_summary(df, groups):
     st.markdown("---")
 
 
-def get_index_futures_pc(bhav_file, target_expiry_index=0):
-    """
-    Reads the Index Bhavcopy and pulls the Previous Close (ClsPric) of the
-    NIFTY and BANKNIFTY INDEX FUTURES (FinInstrmTp == 'IDF') for the
-    selected expiry (same Current/Next Month choice as Monthly/Weekly/Index
-    tabs). Returns {'NIFTY': pc, 'BANK NIFTY': pc}.
-    """
-    pc_map = {'NIFTY': 0.0, 'BANK NIFTY': 0.0}
+def get_index_atm_options(bhav_file, nse_instruments, target_expiry_index=0):
+    """Return the nearest CE and PE index options around each future's close."""
+    required_cols = ['FinInstrmTp', 'TckrSymb', 'XpryDt', 'ClsPric', 'StrkPric', 'OptnTp']
+    json_cols = ['underlying_symbol', 'strike_price', 'instrument_type', 'expiry_dt', 'instrument_key']
+    if nse_instruments is None or not all(c in nse_instruments.columns for c in json_cols):
+        return pd.DataFrame()
+
     try:
         df_bhav = pd.read_csv(bhav_file)
-        required_cols = ['FinInstrmTp', 'TckrSymb', 'XpryDt', 'ClsPric']
-        if not all(col in df_bhav.columns for col in required_cols):
-            return pc_map
+        if not all(c in df_bhav.columns for c in required_cols):
+            return pd.DataFrame()
 
-        idx_futures = df_bhav[
+        df_bhav['XpryDt'] = pd.to_datetime(df_bhav['XpryDt']).dt.normalize()
+        today = get_ist_now().replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        futures = df_bhav[
             (df_bhav['FinInstrmTp'] == 'IDF') &
-            (df_bhav['TckrSymb'].isin(['NIFTY', 'BANKNIFTY']))
+            (df_bhav['TckrSymb'].isin(['NIFTY', 'BANKNIFTY'])) &
+            (df_bhav['XpryDt'] >= today)
         ].copy()
-        if idx_futures.empty:
-            return pc_map
+        options = df_bhav[
+            (df_bhav['TckrSymb'].isin(['NIFTY', 'BANKNIFTY'])) &
+            (df_bhav['OptnTp'].isin(['CE', 'PE'])) &
+            (df_bhav['XpryDt'] >= today)
+        ].copy()
+        if futures.empty or options.empty:
+            return pd.DataFrame()
 
-        idx_futures['XpryDt'] = pd.to_datetime(idx_futures['XpryDt'])
-        ist_now = get_ist_now()
-        today = ist_now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
-        idx_futures = idx_futures[idx_futures['XpryDt'] >= today]
-        if idx_futures.empty:
-            return pc_map
-
-        symbol_to_label = {'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANK NIFTY'}
-        for sym, grp in idx_futures.groupby('TckrSymb'):
-            exps = sorted(grp['XpryDt'].unique())
-            if not exps:
+        labels = {'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANK NIFTY'}
+        selected = []
+        for symbol in ['NIFTY', 'BANKNIFTY']:
+            symbol_futures = futures[futures['TckrSymb'] == symbol]
+            expiries = sorted(symbol_futures['XpryDt'].dropna().unique())
+            if not expiries:
                 continue
-            idx = target_expiry_index if target_expiry_index < len(exps) else len(exps) - 1
-            target_exp = exps[idx]
-            pc_val = grp[grp['XpryDt'] == target_exp]['ClsPric'].iloc[0]
-            pc_map[symbol_to_label.get(sym, sym)] = float(pc_val)
+            expiry_idx = min(max(int(target_expiry_index), 0), len(expiries) - 1)
+            expiry = pd.Timestamp(expiries[expiry_idx])
+            future_row = symbol_futures[symbol_futures['XpryDt'] == expiry].iloc[0]
+            previous_close = pd.to_numeric(future_row['ClsPric'], errors='coerce')
+            if pd.isna(previous_close):
+                continue
 
-        return pc_map
+            expiry_options = options[
+                (options['TckrSymb'] == symbol) & (options['XpryDt'] == expiry)
+            ].copy()
+            expiry_options['StrkPric'] = pd.to_numeric(expiry_options['StrkPric'], errors='coerce')
+            expiry_options['ClsPric'] = pd.to_numeric(expiry_options['ClsPric'], errors='coerce')
+            expiry_options = expiry_options.dropna(subset=['StrkPric', 'ClsPric'])
+            if expiry_options.empty:
+                continue
+
+            for option_type in ['CE', 'PE']:
+                candidates = expiry_options[expiry_options['OptnTp'] == option_type].copy()
+                if candidates.empty:
+                    continue
+                candidates['StrikeDiff'] = (candidates['StrkPric'] - float(previous_close)).abs()
+                nearest = candidates.sort_values(['StrikeDiff', 'StrkPric']).iloc[0]
+                selected.append({
+                    'Symbol': labels[symbol],
+                    'Underlying': symbol,
+                    'OptionType': option_type,
+                    'StrikePrice': float(nearest['StrkPric']),
+                    'Trigger': float(nearest['ClsPric']) * 2,
+                    'ExpiryDate': expiry,
+                })
+
+        if not selected:
+            return pd.DataFrame()
+
+        selected_df = pd.DataFrame(selected)
+        instruments = nse_instruments[json_cols].copy()
+        instruments['expiry_dt'] = pd.to_datetime(instruments['expiry_dt']).dt.normalize()
+        instruments['strike_price'] = pd.to_numeric(instruments['strike_price'], errors='coerce')
+        selected_df = selected_df.merge(
+            instruments,
+            left_on=['Underlying', 'StrikePrice', 'OptionType', 'ExpiryDate'],
+            right_on=['underlying_symbol', 'strike_price', 'instrument_type', 'expiry_dt'],
+            how='inner'
+        )
+        return selected_df[['Symbol', 'OptionType', 'StrikePrice', 'Trigger', 'instrument_key']]
     except Exception:
-        return pc_map
+        return pd.DataFrame()
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0, section_title=None, expiry=None):
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0, nse_instruments=None, section_title=None, expiry=None):
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
         return
@@ -811,37 +851,34 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     calls_df = calls_df.sort_values(by='change %', ascending=False)
     puts_df = puts_df.sort_values(by='change %', ascending=False)
 
-    # --- Pin NIFTY / BANK NIFTY (futures PC as Trigger, live LTP) at the
-    # top of BOTH tables, every refresh - so the index level is always
-    # visible regardless of how the rest of the table is sorted.
-    if show_index_tracker and index_bhav_file:
-        pc_map = get_index_futures_pc(index_bhav_file, target_expiry_idx)
-        NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
-        BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
+    # Pin the nearest index CE and PE contracts above their corresponding tables.
+    if show_index_tracker and index_bhav_file and nse_instruments is not None:
+        index_options = get_index_atm_options(index_bhav_file, nse_instruments, target_expiry_idx)
+        if not index_options.empty:
+            index_keys = index_options['instrument_key'].dropna().unique().tolist()
+            index_ltp = {}
+            if access_token and index_keys:
+                index_ltp = fetch_ltp(index_keys, access_token)
+                if index_ltp:
+                    save_ltp_cache(index_ltp)
+            if access_token:
+                cached_index_ltp = load_ltp_cache()
+                index_ltp = {**cached_index_ltp, **index_ltp}
 
-        idx_ltp_map = {}
-        if access_token:
-            idx_ltp_map = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
-
-        nifty_pc = pc_map.get('NIFTY', 0.0)
-        bn_pc = pc_map.get('BANK NIFTY', 0.0)
-        nifty_ltp = idx_ltp_map.get(NIFTY_INDEX_KEY, 0.0) or 0.0
-        bn_ltp = idx_ltp_map.get(BANKNIFTY_INDEX_KEY, 0.0) or 0.0
-
-        def _idx_change(strike, ltp):
-            try:
-                if strike > 0 and ltp > 0:
-                    return (ltp / strike) * 100
-                return 0.0
-            except:
-                return 0.0
-
-        index_pin_rows = pd.DataFrame([
-            {'Symbol': 'NIFTY', 'StrikePrice': nifty_pc, 'Trigger': nifty_pc, 'ltp': nifty_ltp, 'change %': _idx_change(nifty_pc, nifty_ltp)},
-            {'Symbol': 'BANK NIFTY', 'StrikePrice': bn_pc, 'Trigger': bn_pc, 'ltp': bn_ltp, 'change %': _idx_change(bn_pc, bn_ltp)},
-        ])
-        calls_df = pd.concat([index_pin_rows, calls_df], ignore_index=True)
-        puts_df = pd.concat([index_pin_rows, puts_df], ignore_index=True)
+            index_options['ltp'] = index_options['instrument_key'].map(index_ltp).fillna(0.0)
+            index_options['change %'] = index_options.apply(
+                lambda row: (row['ltp'] / row['Trigger'] * 100)
+                if row['Trigger'] > 0 and row['ltp'] > 0 else 0.0,
+                axis=1
+            )
+            calls_pin = index_options[index_options['OptionType'] == 'CE'][
+                ['Symbol', 'StrikePrice', 'Trigger', 'ltp', 'change %']
+            ]
+            puts_pin = index_options[index_options['OptionType'] == 'PE'][
+                ['Symbol', 'StrikePrice', 'Trigger', 'ltp', 'change %']
+            ]
+            calls_df = pd.concat([calls_pin, calls_df], ignore_index=True)
+            puts_df = pd.concat([puts_pin, puts_df], ignore_index=True)
 
     display_cols = ['Symbol', 'StrikePrice', 'Trigger', 'ltp', 'change %']
     
@@ -1180,6 +1217,7 @@ if not nse_json_df.empty:
                     show_index_tracker=True,
                     index_bhav_file=FILES['Index'],
                     target_expiry_idx=target_expiry_idx,
+                    nse_instruments=nse_json_df,
                     section_title=f"Index Options — Nifty 50 & Bank Nifty Stocks ({expiry_type if not is_client_view else 'Current Month'})",
                     expiry=target_exp
                 )
