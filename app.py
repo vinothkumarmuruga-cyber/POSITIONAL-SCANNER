@@ -669,29 +669,72 @@ def render_breadth_summary(df, groups):
     st.markdown("---")
 
 
-def render_index_spot_tracker(access_token):
+def get_index_futures_pc(bhav_file, target_expiry_index=0):
     """
-    Small table below the Trend Summary: lets the user type a target
-    Strike/level for the NIFTY 50 and NIFTY BANK index itself (not the
-    stocks), fetches the live index LTP via Upstox, and shows the same
-    Trigger / ltp / change % pattern as the rest of the app (Trigger
-    mirrors the entered Strike; change % = ltp / Trigger * 100).
+    Reads the Index Bhavcopy and pulls the Previous Close (ClsPric) of the
+    NIFTY and BANKNIFTY INDEX FUTURES (FinInstrmTp == 'IDF') for the
+    selected expiry (same Current/Next Month choice as Monthly/Weekly/Index
+    tabs). Returns {'NIFTY': pc, 'BANK NIFTY': pc}.
+    """
+    pc_map = {'NIFTY': 0.0, 'BANK NIFTY': 0.0}
+    try:
+        df_bhav = pd.read_csv(bhav_file)
+        required_cols = ['FinInstrmTp', 'TckrSymb', 'XpryDt', 'ClsPric']
+        if not all(col in df_bhav.columns for col in required_cols):
+            return pc_map
+
+        idx_futures = df_bhav[
+            (df_bhav['FinInstrmTp'] == 'IDF') &
+            (df_bhav['TckrSymb'].isin(['NIFTY', 'BANKNIFTY']))
+        ].copy()
+        if idx_futures.empty:
+            return pc_map
+
+        idx_futures['XpryDt'] = pd.to_datetime(idx_futures['XpryDt'])
+        ist_now = get_ist_now()
+        today = ist_now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        idx_futures = idx_futures[idx_futures['XpryDt'] >= today]
+        if idx_futures.empty:
+            return pc_map
+
+        symbol_to_label = {'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANK NIFTY'}
+        for sym, grp in idx_futures.groupby('TckrSymb'):
+            exps = sorted(grp['XpryDt'].unique())
+            if not exps:
+                continue
+            idx = target_expiry_index if target_expiry_index < len(exps) else len(exps) - 1
+            target_exp = exps[idx]
+            pc_val = grp[grp['XpryDt'] == target_exp]['ClsPric'].iloc[0]
+            pc_map[symbol_to_label.get(sym, sym)] = float(pc_val)
+
+        return pc_map
+    except Exception:
+        return pc_map
+
+
+def render_index_spot_tracker(bhav_file, access_token, target_expiry_index=0):
+    """
+    Small table below the Trend Summary: Strike/Trigger is auto-pulled as
+    the Previous Close of the NIFTY / BANKNIFTY INDEX FUTURES from the
+    uploaded Index Bhavcopy (no manual entry needed). Fetches the live
+    index LTP via Upstox and shows the same Trigger / ltp / change %
+    pattern as the rest of the app (change % = ltp / Trigger * 100).
     """
     st.subheader("🎯 Index Spot Tracker")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        nifty_strike = st.number_input("NIFTY Strike", min_value=0.0, step=0.05, format="%.2f", key="idx_nifty_strike")
-    with c2:
-        bn_strike = st.number_input("BANK NIFTY Strike", min_value=0.0, step=0.05, format="%.2f", key="idx_bn_strike")
+    pc_map = get_index_futures_pc(bhav_file, target_expiry_index)
+    nifty_strike = pc_map.get('NIFTY', 0.0)
+    bn_strike = pc_map.get('BANK NIFTY', 0.0)
+
+    if nifty_strike == 0.0 and bn_strike == 0.0:
+        st.info("NIFTY / BANKNIFTY index futures not found in the uploaded Index Bhavcopy for the selected expiry.")
 
     NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
     BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
 
     ltp_map = {}
     if access_token:
-        fetched = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
-        ltp_map = fetched
+        ltp_map = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
     else:
         st.warning("Enter Access Token in sidebar to see live LTP.")
 
@@ -739,7 +782,7 @@ def render_index_spot_tracker(access_token):
     st.markdown("---")
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False):
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -825,7 +868,7 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
 
     # --- Index Spot Tracker (NIFTY / BANK NIFTY level, below Trend Summary) ---
     if show_index_tracker:
-        render_index_spot_tracker(access_token)
+        render_index_spot_tracker(index_bhav_file, access_token, target_expiry_idx)
 
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
@@ -1164,7 +1207,9 @@ if not nse_json_df.empty:
                     df_i, access_token, "Index", telegram_cfgs['Index'],
                     breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS},
                     highlight_symbols=BANKNIFTY_SYMBOLS,
-                    show_index_tracker=True
+                    show_index_tracker=True,
+                    index_bhav_file=FILES['Index'],
+                    target_expiry_idx=target_expiry_idx
                 )
             show_index()
         else:
