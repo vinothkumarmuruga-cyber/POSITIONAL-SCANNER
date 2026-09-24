@@ -669,7 +669,77 @@ def render_breadth_summary(df, groups):
     st.markdown("---")
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None):
+def render_index_spot_tracker(access_token):
+    """
+    Small table below the Trend Summary: lets the user type a target
+    Strike/level for the NIFTY 50 and NIFTY BANK index itself (not the
+    stocks), fetches the live index LTP via Upstox, and shows the same
+    Trigger / ltp / change % pattern as the rest of the app (Trigger
+    mirrors the entered Strike; change % = ltp / Trigger * 100).
+    """
+    st.subheader("🎯 Index Spot Tracker")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        nifty_strike = st.number_input("NIFTY Strike", min_value=0.0, step=0.05, format="%.2f", key="idx_nifty_strike")
+    with c2:
+        bn_strike = st.number_input("BANK NIFTY Strike", min_value=0.0, step=0.05, format="%.2f", key="idx_bn_strike")
+
+    NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
+    BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
+
+    ltp_map = {}
+    if access_token:
+        fetched = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
+        ltp_map = fetched
+    else:
+        st.warning("Enter Access Token in sidebar to see live LTP.")
+
+    nifty_ltp = ltp_map.get(NIFTY_INDEX_KEY, 0.0) or 0.0
+    bn_ltp = ltp_map.get(BANKNIFTY_INDEX_KEY, 0.0) or 0.0
+
+    def calc_change(strike, ltp):
+        try:
+            if strike > 0 and ltp > 0:
+                return (ltp / strike) * 100
+            return 0.0
+        except:
+            return 0.0
+
+    rows = [
+        {'Symbol': 'NIFTY', 'Strike': nifty_strike, 'Trigger': nifty_strike, 'ltp': nifty_ltp, 'change %': calc_change(nifty_strike, nifty_ltp)},
+        {'Symbol': 'BANK NIFTY', 'Strike': bn_strike, 'Trigger': bn_strike, 'ltp': bn_ltp, 'change %': calc_change(bn_strike, bn_ltp)},
+    ]
+    tracker_df = pd.DataFrame(rows)
+
+    def color_change(val):
+        if isinstance(val, (int, float)):
+            if val >= 100:
+                return 'background-color: darkgreen; color: white'
+            elif val >= 90:
+                return 'background-color: lightgreen; color: black'
+        return ''
+
+    def color_symbol(val):
+        if val == 'BANK NIFTY':
+            return 'background-color: #8e44ad; color: white'
+        elif val == 'NIFTY':
+            return 'background-color: #2980b9; color: white'
+        return ''
+
+    st.dataframe(
+        tracker_df.style
+        .map(color_change, subset=['change %'])
+        .map(color_symbol, subset=['Symbol'])
+        .format({'Strike': '{:.2f}', 'Trigger': '{:.2f}', 'ltp': '{:.2f}', 'change %': '{:.2f}%'})
+        .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
+        hide_index=True,
+        use_container_width=True
+    )
+    st.markdown("---")
+
+
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -752,6 +822,10 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     # --- Trend Summary (only when breadth_groups passed - i.e. Index tab) ---
     if breadth_groups:
         render_breadth_summary(df, breadth_groups)
+
+    # --- Index Spot Tracker (NIFTY / BANK NIFTY level, below Trend Summary) ---
+    if show_index_tracker:
+        render_index_spot_tracker(access_token)
 
     # Split Calls/Puts
     calls_df = df[df['OptionType'] == 'CE'].copy()
@@ -1089,7 +1163,8 @@ if not nse_json_df.empty:
                 display_option_chain(
                     df_i, access_token, "Index", telegram_cfgs['Index'],
                     breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS},
-                    highlight_symbols=BANKNIFTY_SYMBOLS
+                    highlight_symbols=BANKNIFTY_SYMBOLS,
+                    show_index_tracker=True
                 )
             show_index()
         else:
