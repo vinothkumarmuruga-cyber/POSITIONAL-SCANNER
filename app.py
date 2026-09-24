@@ -669,7 +669,7 @@ def render_breadth_summary(df, groups):
     st.markdown("---")
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None):
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -772,6 +772,11 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
                 return 'background-color: lightgreen; color: black'
         return ''
 
+    def color_bn_symbol(val):
+        if highlight_symbols and val in highlight_symbols:
+            return 'background-color: #8e44ad; color: white'  # purple - Bank Nifty stock
+        return ''
+
     format_dict = {
         'change %': '{:.2f}%',
         'Trigger': '{:.2f}',
@@ -785,6 +790,7 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
         st.dataframe(
             calls_df[display_cols].style
             .map(color_change, subset=['change %'])
+            .map(color_bn_symbol, subset=['Symbol'])
             .format(format_dict)
             .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
             hide_index=True, 
@@ -797,6 +803,7 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
         st.dataframe(
             puts_df[display_cols].style
             .map(color_change, subset=['change %'])
+            .map(color_bn_symbol, subset=['Symbol'])
             .format(format_dict)
             .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
             hide_index=True, 
@@ -1081,7 +1088,8 @@ if not nse_json_df.empty:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
                 display_option_chain(
                     df_i, access_token, "Index", telegram_cfgs['Index'],
-                    breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS}
+                    breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS},
+                    highlight_symbols=BANKNIFTY_SYMBOLS
                 )
             show_index()
         else:
