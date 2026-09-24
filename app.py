@@ -133,14 +133,6 @@ BANKNIFTY_SYMBOLS = [
 # Combined, de-duplicated universe for the Index tab (order preserved)
 INDEX_SYMBOLS = list(dict.fromkeys(NIFTY50_SYMBOLS + BANKNIFTY_SYMBOLS))
 
-# NIFTY / BANKNIFTY index options+futures TckrSymb values (as they
-# appear in NSE Bhavcopy). Added to the Index tab's symbol_filter so
-# the SAME ATM-vs-future(PC) logic in process_bhavcopy() picks up the
-# real NIFTY/BANKNIFTY ATM CE & PE strikes too (not a fake spot-price
-# pinned row).
-INDEX_UNDERLYING_SYMBOLS = ['NIFTY', 'BANKNIFTY']
-INDEX_TAB_SYMBOL_FILTER = INDEX_SYMBOLS + INDEX_UNDERLYING_SYMBOLS
-
 FILES = {
     'Monthly': os.path.join(DATA_DIR, 'monthly.csv'),
     'Weekly': os.path.join(DATA_DIR, 'weekly.csv'),
@@ -432,11 +424,8 @@ def load_nse_json():
 def process_bhavcopy(bhav_file, df_json, target_expiry_index=0, symbol_filter=None):
     """
     symbol_filter: optional list of TckrSymb values to restrict processing to
-    (used by the Index tab to keep only Nifty 50 / Bank Nifty stocks, plus
-    NIFTY/BANKNIFTY themselves - the ATM-vs-future(PC) logic below is
-    IDENTICAL for stocks and for the NIFTY/BANKNIFTY index options: the ATM
-    strike is always the one nearest to the near-month FUTURE'S PREVIOUS
-    CLOSE (ClsPric from the Bhavcopy) - never the live spot/future LTP).
+    (used by the Index tab to keep only Nifty 50 / Bank Nifty stocks - the
+    ATM-vs-future logic below is otherwise IDENTICAL to Monthly/Weekly).
     """
     try:
         df_bhav = pd.read_csv(bhav_file)
@@ -506,8 +495,7 @@ def process_bhavcopy(bhav_file, df_json, target_expiry_index=0, symbol_filter=No
         merged = pd.merge(options, near_futures, on='TckrSymb')
         merged = merged[merged['XpryDt'] == merged['FutureExpiryDate']]
         
-        # Calculate ATM using the FUTURE'S PREVIOUS CLOSE (PC) as the
-        # reference price - NOT live spot/future LTP.
+        # Calculate ATM
         merged['Diff'] = abs(merged['StrkPric'] - merged['FuturePrice'])
         
         # Find best strike per symbol (Minimize Diff, then tie-break with StrikePrice)
@@ -608,53 +596,19 @@ def fetch_ltp(instrument_keys, token):
     
     return ltp_map
 
-
-def extract_index_option_data(df):
+def render_breadth_summary(df, groups):
     """
-    Pulls the ATM CE & PE row (already selected upstream in
-    process_bhavcopy using the future's PREVIOUS CLOSE, i.e. PC - never
-    live spot/future LTP) for NIFTY and BANKNIFTY out of the already-
-    processed option dataframe, keyed by the breadth-table label so
-    render_breadth_summary can show them alongside the NIFTY 50 / BANK
-    NIFTY stock-breadth row. Returns {} if NIFTY/BANKNIFTY aren't present
-    in this dataframe (e.g. not in the uploaded Bhavcopy).
-    """
-    data = {}
-    label_map = {'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'BANK NIFTY'}
-    for sym, label in label_map.items():
-        sub = df[df['Symbol'] == sym]
-        if sub.empty:
-            continue
-        entry = {}
-        ce = sub[sub['OptionType'] == 'CE']
-        pe = sub[sub['OptionType'] == 'PE']
-        if not ce.empty:
-            r = ce.iloc[0]
-            entry['strike'] = r['StrikePrice']
-            entry['ce_trigger'] = r['Trigger']
-            entry['ce_ltp'] = r['ltp']
-            entry['ce_change'] = r['change %']
-        if not pe.empty:
-            r = pe.iloc[0]
-            entry.setdefault('strike', r['StrikePrice'])
-            entry['pe_trigger'] = r['Trigger']
-            entry['pe_ltp'] = r['ltp']
-            entry['pe_change'] = r['change %']
-        if entry:
-            data[label] = entry
-    return data
+    Renders a small breadth/trend table above the CE/PE columns.
 
+    For each group (e.g. 'NIFTY 50', 'BANK NIFTY'), counts how many of
+    that group's stocks currently have a CE (call) with change % >= 100
+    versus a PE (put) with change % >= 100, and the total distinct
+    stocks from that group present in the uploaded file.
 
-def render_breadth_summary(df, groups, index_option_data=None):
-    """
-    Trend Summary table shown at the TOP of every tab (Monthly, Weekly,
-    Index). For each basket (NIFTY 50 / BANK NIFTY stocks) shows breadth
-    counts, plus - when available - the real NIFTY/BANKNIFTY ATM CE & PE
-    strike/Trigger/LTP/Change % (strike chosen via the future's PREVIOUS
-    CLOSE - PC - never live spot/future LTP; same rule for both indices).
-
-    Rendered as a plain HTML table (not st.dataframe) so font size is
-    fully under our control and stays large/legible.
+    Interpretation: more CE triggers than PE triggers across the basket
+    suggests broad-based upside strength (more calls doubling up than
+    puts) -> "Bullish"; more PE triggers suggests downside strength ->
+    "Bearish"; equal counts -> "Neutral".
     """
     if df.empty or 'change %' not in df.columns:
         return
@@ -677,109 +631,88 @@ def render_breadth_summary(df, groups, index_option_data=None):
 
         rows.append({
             'Symbol': label,
-            'ce_above': ce_above,
-            'pe_above': pe_above,
-            'total_stocks': total_stocks,
-            'trend': trend,
-            'idx': (index_option_data or {}).get(label, {})
+            'No of CE Abv 100': ce_above,
+            'No of PE Abv 100': pe_above,
+            'Total Stocks': total_stocks,
+            'Trend': trend
         })
 
     if not rows:
         return
 
-    def fmt(v, dec=2):
-        try:
-            return f"{float(v):,.{dec}f}"
-        except (TypeError, ValueError):
-            return "-"
+    summary_df = pd.DataFrame(rows)
 
-    def chg_style(v):
-        try:
-            v = float(v)
-        except (TypeError, ValueError):
-            return ''
-        if v >= 100:
-            return 'background-color:darkgreen;color:white;'
-        elif v >= 90:
-            return 'background-color:lightgreen;color:black;'
+    def color_trend(val):
+        if isinstance(val, str):
+            if 'Up' in val:
+                return 'background-color: darkgreen; color: white'
+            elif 'Down' in val:
+                return 'background-color: darkred; color: white'
         return ''
 
-    def trend_style(t):
-        if 'Up' in t:
-            return 'background-color:darkgreen;color:white;'
-        elif 'Down' in t:
-            return 'background-color:darkred;color:white;'
+    def color_symbol(val):
+        if val == 'BANK NIFTY':
+            return 'background-color: #8e44ad; color: white'  # purple
+        elif val == 'NIFTY 50':
+            return 'background-color: #2980b9; color: white'  # blue
         return ''
-
-    SYMBOL_BG = {'BANK NIFTY': '#8e44ad', 'NIFTY 50': '#2980b9'}
-    FONT_SIZE = "20px"
-    CELL = "padding:10px 14px;text-align:center;white-space:nowrap;"
-
-    body_rows = ""
-    for r in rows:
-        idx = r['idx']
-        strike_str = fmt(idx.get('strike'), 0) if idx.get('strike') is not None else '-'
-        ce_trigger = fmt(idx.get('ce_trigger')) if 'ce_trigger' in idx else '-'
-        ce_ltp = fmt(idx.get('ce_ltp')) if 'ce_ltp' in idx else '-'
-        pe_trigger = fmt(idx.get('pe_trigger')) if 'pe_trigger' in idx else '-'
-        pe_ltp = fmt(idx.get('pe_ltp')) if 'pe_ltp' in idx else '-'
-        ce_change = idx.get('ce_change')
-        pe_change = idx.get('pe_change')
-        ce_change_str = f"{fmt(ce_change)}%" if ce_change is not None else '-'
-        pe_change_str = f"{fmt(pe_change)}%" if pe_change is not None else '-'
-
-        sym_bg = SYMBOL_BG.get(r['Symbol'], '')
-        sym_style = f'background-color:{sym_bg};color:white;font-weight:700;' if sym_bg else 'font-weight:700;'
-
-        body_rows += f"""
-        <tr>
-            <td style="{CELL}text-align:left;{sym_style}">{html.escape(r['Symbol'])}</td>
-            <td style="{CELL}">{r['ce_above']}</td>
-            <td style="{CELL}">{r['pe_above']}</td>
-            <td style="{CELL}">{r['total_stocks']}</td>
-            <td style="{CELL}font-weight:700;{trend_style(r['trend'])}">{r['trend']}</td>
-            <td style="{CELL}">{strike_str}</td>
-            <td style="{CELL}">{ce_trigger}</td>
-            <td style="{CELL}">{ce_ltp}</td>
-            <td style="{CELL}font-weight:700;{chg_style(ce_change)}">{ce_change_str}</td>
-            <td style="{CELL}">{pe_trigger}</td>
-            <td style="{CELL}">{pe_ltp}</td>
-            <td style="{CELL}font-weight:700;{chg_style(pe_change)}">{pe_change_str}</td>
-        </tr>
-        """
-
-    table_html = f"""
-    <div style="overflow-x:auto;margin-bottom:10px;border:1px solid #d6d6d6;border-radius:6px;">
-    <table style="width:100%;border-collapse:collapse;font-size:{FONT_SIZE};font-weight:600;font-family:inherit;">
-        <thead>
-            <tr style="background-color:#f0f2f6;">
-                <th style="{CELL}text-align:left;">Symbol</th>
-                <th style="{CELL}">No of CE Abv 100</th>
-                <th style="{CELL}">No of PE Abv 100</th>
-                <th style="{CELL}">Total Stocks</th>
-                <th style="{CELL}">Trend</th>
-                <th style="{CELL}">ATM Strike (PC)</th>
-                <th style="{CELL}">CE Trigger</th>
-                <th style="{CELL}">CE LTP</th>
-                <th style="{CELL}">CE Chg %</th>
-                <th style="{CELL}">PE Trigger</th>
-                <th style="{CELL}">PE LTP</th>
-                <th style="{CELL}">PE Chg %</th>
-            </tr>
-        </thead>
-        <tbody>
-            {body_rows}
-        </tbody>
-    </table>
-    </div>
-    """
 
     st.subheader("📊 Trend Summary")
-    st.markdown(table_html, unsafe_allow_html=True)
+    st.dataframe(
+        summary_df.style
+        .map(color_trend, subset=['Trend'])
+        .map(color_symbol, subset=['Symbol'])
+        .set_properties(**{'font-weight': '600', 'text-align': 'center', 'font-size': '16px'}),
+        hide_index=True,
+        use_container_width=True
+    )
     st.markdown("---")
 
 
-def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None):
+def get_index_futures_pc(bhav_file, target_expiry_index=0):
+    """
+    Reads the Index Bhavcopy and pulls the Previous Close (ClsPric) of the
+    NIFTY and BANKNIFTY INDEX FUTURES (FinInstrmTp == 'IDF') for the
+    selected expiry (same Current/Next Month choice as Monthly/Weekly/Index
+    tabs). Returns {'NIFTY': pc, 'BANK NIFTY': pc}.
+    """
+    pc_map = {'NIFTY': 0.0, 'BANK NIFTY': 0.0}
+    try:
+        df_bhav = pd.read_csv(bhav_file)
+        required_cols = ['FinInstrmTp', 'TckrSymb', 'XpryDt', 'ClsPric']
+        if not all(col in df_bhav.columns for col in required_cols):
+            return pc_map
+
+        idx_futures = df_bhav[
+            (df_bhav['FinInstrmTp'] == 'IDF') &
+            (df_bhav['TckrSymb'].isin(['NIFTY', 'BANKNIFTY']))
+        ].copy()
+        if idx_futures.empty:
+            return pc_map
+
+        idx_futures['XpryDt'] = pd.to_datetime(idx_futures['XpryDt'])
+        ist_now = get_ist_now()
+        today = ist_now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        idx_futures = idx_futures[idx_futures['XpryDt'] >= today]
+        if idx_futures.empty:
+            return pc_map
+
+        symbol_to_label = {'NIFTY': 'NIFTY', 'BANKNIFTY': 'BANK NIFTY'}
+        for sym, grp in idx_futures.groupby('TckrSymb'):
+            exps = sorted(grp['XpryDt'].unique())
+            if not exps:
+                continue
+            idx = target_expiry_index if target_expiry_index < len(exps) else len(exps) - 1
+            target_exp = exps[idx]
+            pc_val = grp[grp['XpryDt'] == target_exp]['ClsPric'].iloc[0]
+            pc_map[symbol_to_label.get(sym, sym)] = float(pc_val)
+
+        return pc_map
+    except Exception:
+        return pc_map
+
+
+def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_groups=None, highlight_symbols=None, show_index_tracker=False, index_bhav_file=None, target_expiry_idx=0):
     st.caption(f"Last Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
     if df.empty:
         st.info("No data to display. Please upload a valid Bhavcopy in the sidebar.")
@@ -855,29 +788,53 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
     df['change %'] = df['change_val']
 
     # --- Telegram Trigger Alerts (per-tab config) ---
-    # Runs on the full (CE+PE, including NIFTY/BANKNIFTY) dataframe,
-    # after change % is computed, before the CE/PE split below.
+    # Runs on the full (CE+PE) dataframe, after change % is
+    # computed, before the CE/PE split below.
     check_and_alert_triggers(df, key_suffix, tg_cfg)
 
-    # --- Trend Summary (always shown at the top of every tab) ---
-    # Pulls the real NIFTY/BANKNIFTY ATM CE & PE data (PC-based strike
-    # selection) out of this same dataframe before it's filtered out
-    # of the stock CE/PE tables below.
-    index_option_data = extract_index_option_data(df)
+    # --- Trend Summary (only when breadth_groups passed - i.e. Index tab) ---
     if breadth_groups:
-        render_breadth_summary(df, breadth_groups, index_option_data)
-
-    # NIFTY / BANK NIFTY no longer appear as rows in the stock CE/PE
-    # tables - they're shown in the Trend Summary table above instead.
-    df_display = df[~df['Symbol'].isin(INDEX_UNDERLYING_SYMBOLS)].copy()
+        render_breadth_summary(df, breadth_groups)
 
     # Split Calls/Puts
-    calls_df = df_display[df_display['OptionType'] == 'CE'].copy()
-    puts_df = df_display[df_display['OptionType'] == 'PE'].copy()
+    calls_df = df[df['OptionType'] == 'CE'].copy()
+    puts_df = df[df['OptionType'] == 'PE'].copy()
 
     # Sort
     calls_df = calls_df.sort_values(by='change %', ascending=False)
     puts_df = puts_df.sort_values(by='change %', ascending=False)
+
+    # --- Pin NIFTY / BANK NIFTY (futures PC as Trigger, live LTP) at the
+    # top of BOTH tables, every refresh - so the index level is always
+    # visible regardless of how the rest of the table is sorted.
+    if show_index_tracker and index_bhav_file:
+        pc_map = get_index_futures_pc(index_bhav_file, target_expiry_idx)
+        NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
+        BANKNIFTY_INDEX_KEY = "NSE_INDEX|Nifty Bank"
+
+        idx_ltp_map = {}
+        if access_token:
+            idx_ltp_map = fetch_ltp([NIFTY_INDEX_KEY, BANKNIFTY_INDEX_KEY], access_token)
+
+        nifty_pc = pc_map.get('NIFTY', 0.0)
+        bn_pc = pc_map.get('BANK NIFTY', 0.0)
+        nifty_ltp = idx_ltp_map.get(NIFTY_INDEX_KEY, 0.0) or 0.0
+        bn_ltp = idx_ltp_map.get(BANKNIFTY_INDEX_KEY, 0.0) or 0.0
+
+        def _idx_change(strike, ltp):
+            try:
+                if strike > 0 and ltp > 0:
+                    return (ltp / strike) * 100
+                return 0.0
+            except:
+                return 0.0
+
+        index_pin_rows = pd.DataFrame([
+            {'Symbol': 'NIFTY', 'StrikePrice': nifty_pc, 'Trigger': nifty_pc, 'ltp': nifty_ltp, 'change %': _idx_change(nifty_pc, nifty_ltp)},
+            {'Symbol': 'BANK NIFTY', 'StrikePrice': bn_pc, 'Trigger': bn_pc, 'ltp': bn_ltp, 'change %': _idx_change(bn_pc, bn_ltp)},
+        ])
+        calls_df = pd.concat([index_pin_rows, calls_df], ignore_index=True)
+        puts_df = pd.concat([index_pin_rows, puts_df], ignore_index=True)
 
     display_cols = ['Symbol', 'StrikePrice', 'Trigger', 'ltp', 'change %']
     
@@ -891,7 +848,11 @@ def display_option_chain(df, access_token, key_suffix, tg_cfg=None, breadth_grou
         return ''
 
     def color_bn_symbol(val):
-        if highlight_symbols and val in highlight_symbols:
+        if val == 'BANK NIFTY':
+            return 'background-color: #8e44ad; color: white'  # purple - Bank Nifty index
+        elif val == 'NIFTY':
+            return 'background-color: #2980b9; color: white'  # blue - Nifty index
+        elif highlight_symbols and val in highlight_symbols:
             return 'background-color: #8e44ad; color: white'  # purple - Bank Nifty stock
         return ''
 
@@ -1166,8 +1127,6 @@ if not nse_json_df.empty:
     
     run_every = refresh_interval if auto_refresh else None
 
-    BREADTH_GROUPS = {'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS}
-
     with tab1:
         st.header(f"Monthly Options ({expiry_type if not is_client_view else 'Current Month'})")
         if os.path.exists(FILES['Monthly']):
@@ -1176,11 +1135,7 @@ if not nse_json_df.empty:
                 df_m, target_exp, all_exps = process_bhavcopy(FILES['Monthly'], nse_json_df, target_expiry_index=target_expiry_idx)
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(
-                    df_m, access_token, "Monthly", telegram_cfgs['Monthly'],
-                    breadth_groups=BREADTH_GROUPS,
-                    highlight_symbols=BANKNIFTY_SYMBOLS
-                )
+                display_option_chain(df_m, access_token, "Monthly", telegram_cfgs['Monthly'])
             show_monthly()
         else:
             st.warning("Monthly Bhavcopy file not found. Please upload in the sidebar.")
@@ -1193,11 +1148,7 @@ if not nse_json_df.empty:
                 df_w, target_exp, all_exps = process_bhavcopy(FILES['Weekly'], nse_json_df, target_expiry_index=target_expiry_idx)
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
-                display_option_chain(
-                    df_w, access_token, "Weekly", telegram_cfgs['Weekly'],
-                    breadth_groups=BREADTH_GROUPS,
-                    highlight_symbols=BANKNIFTY_SYMBOLS
-                )
+                display_option_chain(df_w, access_token, "Weekly", telegram_cfgs['Weekly'])
             show_weekly()
         else:
             st.warning("Weekly Bhavcopy file not found. Please upload in the sidebar.")
@@ -1210,14 +1161,17 @@ if not nse_json_df.empty:
                 df_i, target_exp, all_exps = process_bhavcopy(
                     FILES['Index'], nse_json_df,
                     target_expiry_index=target_expiry_idx,
-                    symbol_filter=INDEX_TAB_SYMBOL_FILTER
+                    symbol_filter=INDEX_SYMBOLS
                 )
                 if target_exp:
                     st.info(f"📅 Displaying Expiry: **{target_exp.strftime('%d-%b-%Y')}**")
                 display_option_chain(
                     df_i, access_token, "Index", telegram_cfgs['Index'],
-                    breadth_groups=BREADTH_GROUPS,
-                    highlight_symbols=BANKNIFTY_SYMBOLS
+                    breadth_groups={'NIFTY 50': NIFTY50_SYMBOLS, 'BANK NIFTY': BANKNIFTY_SYMBOLS},
+                    highlight_symbols=BANKNIFTY_SYMBOLS,
+                    show_index_tracker=True,
+                    index_bhav_file=FILES['Index'],
+                    target_expiry_idx=target_expiry_idx
                 )
             show_index()
         else:
